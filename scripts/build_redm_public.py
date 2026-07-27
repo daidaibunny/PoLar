@@ -19,12 +19,16 @@ from reconstruction.redm_builder import (
 	SourceFile,
 	build_redm_public,
 )
+from reconstruction.redm_sources import load_math_train_archive, validate_math_archive
 
 
 QUERY_INFO_REPOSITORY = "hkust-nlp/dart-math-pool-math-query-info"
 QUERY_INFO_REVISION = "e9415a3ed9a5b96f1738abc797dbe34c02dd790e"
-POOL_REPOSITORY = "hkust-nlp/dart-math-pool-math"
-POOL_REVISION = "2493eec006a329336a70255fcc93b8ff362a6aa5"
+DART_POOL_REPOSITORY = "hkust-nlp/dart-math-pool-math"
+DART_POOL_REVISION = "2493eec006a329336a70255fcc93b8ff362a6aa5"
+MATH_ARCHIVE_REPOSITORY = "https://gitee.com/hf-datasets/competition_math"
+MATH_ARCHIVE_REVISION = "71b758ecc688b2822d07ffa7f8393299f1dc7cac"
+MATH_ARCHIVE_SHA256 = "d9b88da85e6ffa3e1057ae675238d6e192574243bdc45ca7d00a1339fc4d0874"
 EXPECTED_UNIQUE_QUESTIONS = 7_500
 
 
@@ -35,6 +39,11 @@ def parse_arguments() -> argparse.Namespace:
 		"--output-directory",
 		type=Path,
 		default=REPOSITORY_ROOT / "data" / "redm-public",
+	)
+	parser.add_argument(
+		"--math-archive",
+		type=Path,
+		default=REPOSITORY_ROOT / "data" / "sources" / "MATH.zip",
 	)
 	parser.add_argument("--seed", type=int, default=42)
 	return parser.parse_args()
@@ -81,7 +90,7 @@ def resolve_source(repository: str, revision: str) -> DatasetSource:
 
 
 def stream_rows(repository: str, revision: str) -> Iterable[dict[str, Any]]:
-	"""Stream a pinned source without storing the 1.62M-response pool locally."""
+	"""Stream pinned DART-Math query metadata."""
 	try:
 		from datasets import load_dataset
 	except ImportError as error:
@@ -98,12 +107,24 @@ def main() -> int:
 	"""Build, hash, and report all five public difficulty files."""
 	arguments = parse_arguments()
 	query_source = resolve_source(QUERY_INFO_REPOSITORY, QUERY_INFO_REVISION)
-	pool_source = resolve_source(POOL_REPOSITORY, POOL_REVISION)
+	correction_source = resolve_source(DART_POOL_REPOSITORY, DART_POOL_REVISION)
+	validate_math_archive(arguments.math_archive, MATH_ARCHIVE_SHA256)
+	math_source = DatasetSource(
+		repository=MATH_ARCHIVE_REPOSITORY,
+		revision=MATH_ARCHIVE_REVISION,
+		files=(
+			SourceFile(
+				path=arguments.math_archive.name,
+				sha256=MATH_ARCHIVE_SHA256,
+				size_bytes=arguments.math_archive.stat().st_size,
+			),
+		),
+	)
 	result = build_redm_public(
 		query_info_rows=stream_rows(QUERY_INFO_REPOSITORY, QUERY_INFO_REVISION),
-		pool_rows=stream_rows(POOL_REPOSITORY, POOL_REVISION),
+		question_rows=load_math_train_archive(arguments.math_archive),
 		output_directory=arguments.output_directory,
-		sources=(query_source, pool_source),
+		sources=(query_source, math_source, correction_source),
 		seed=arguments.seed,
 		expected_unique_questions=EXPECTED_UNIQUE_QUESTIONS,
 	)

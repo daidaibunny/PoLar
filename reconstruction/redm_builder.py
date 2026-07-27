@@ -147,7 +147,7 @@ def build_redm_human(
 
 def build_redm_public(
 	query_info_rows: Iterable[Mapping[str, Any]],
-	pool_rows: Iterable[Mapping[str, Any]],
+	question_rows: Iterable[Mapping[str, Any]],
 	output_directory: Path,
 	sources: Sequence[DatasetSource],
 	seed: int = 42,
@@ -166,7 +166,7 @@ def build_redm_public(
 			+ ", ".join(str(path) for path in _conflicting_outputs),
 		)
 
-	deduplicated = deduplicate_query_records(query_info_rows, pool_rows)
+	deduplicated = deduplicate_query_records(query_info_rows, question_rows)
 	if deduplicated.stats.missing_query_ids:
 		raise DataIntegrityError(
 			"Response pool is missing query IDs required by query-info: "
@@ -258,8 +258,8 @@ def build_redm_public(
 		"statistics": {
 			"unique_questions": len(deduplicated.records),
 			"query_info_rows": deduplicated.stats.query_info_rows,
-			"pool_response_rows": deduplicated.stats.pool_rows,
-			"duplicate_response_rows": deduplicated.stats.duplicate_response_rows,
+			"source_question_rows": deduplicated.stats.pool_rows,
+			"duplicate_source_question_rows": deduplicated.stats.duplicate_response_rows,
 			"unknown_query_rows": deduplicated.stats.unknown_query_rows,
 			"missing_query_ids": list(deduplicated.stats.missing_query_ids),
 			"missing_answers": deduplicated.stats.missing_answers,
