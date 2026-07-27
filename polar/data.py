@@ -299,6 +299,7 @@ class PolarDataset(Dataset):
         start_idx: int,
         end_idx: int,
         original_depth: int,
+        split_filter: Optional[str] = None,
         indices: Optional[List[int]] = None,
         drop_original_path_if_shorter_valid: bool = False,
         keep_original_prob: float = 0.0,
@@ -316,6 +317,17 @@ class PolarDataset(Dataset):
         with open(merged_samples_json, "r") as f:
             data = json.load(f)
         samples = data["samples"] if isinstance(data, dict) and "samples" in data else (list(data.values()) if isinstance(data, dict) else data)
+
+        if split_filter is not None:
+            if split_filter not in ("train", "validation", "test"):
+                raise ValueError("split_filter must be train, validation, test, or None")
+            samples = [
+                sample
+                for sample in samples
+                if isinstance(sample, dict)
+                and isinstance(sample.get("search_metadata"), dict)
+                and sample["search_metadata"].get("data_split") == split_filter
+            ]
 
         # Choose a deterministic subset either by explicit indices or by slice.
         if indices is not None:
@@ -458,4 +470,3 @@ def estimate_path_length_from_actions(actions: List[Tuple[str, int, int]]) -> in
         elif act_type == "repeat":
             total += (cnt + 1) * size
     return total
-

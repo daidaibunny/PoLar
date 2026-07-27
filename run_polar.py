@@ -43,6 +43,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     training.add_argument("--learning_rate", type=float, default=1e-4)
     training.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     training.add_argument("--no_validation", action="store_true", help="Disable validation split and save final epoch checkpoint")
+    training.add_argument(
+        "--use_recorded_data_splits",
+        action="store_true",
+        help="Filter samples by search_metadata.data_split instead of fixed paper indices",
+    )
+    training.add_argument(
+        "--train_only",
+        action="store_true",
+        help="Train and save the Predictor without immediately running online evaluation",
+    )
     training.add_argument("--policy_mode", type=str, default="polar", choices=["polar", "polar_lenpref"])
     training.add_argument("--max_paths_per_sample", type=int, default=50, help="Max valid paths sampled per sample for training")
     training.add_argument("--max_total_examples", type=int, default=None, help="Cap total training examples")
@@ -117,6 +127,8 @@ def normalize_args(args):
 
 def main() -> None:
     args = normalize_args(build_arg_parser().parse_args())
+    if args.eval and args.train_only:
+        raise ValueError("--eval and --train_only cannot be used together")
     print(f"[Config] original_depth={args.original_depth} model_path={args.model_path}")
     print(f"[Config] data_root={args.data_root}")
     print(f"[Config] save_dir={args.save_dir}")
@@ -137,6 +149,8 @@ def main() -> None:
         existing_ckpt = checkpoint_path_for_args(args)
         if os.path.exists(existing_ckpt) and os.path.isfile(existing_ckpt):
             print(f"[Polar] Found existing final checkpoint, skip training: {existing_ckpt}")
+            if args.train_only:
+                return
             args.checkpoint_path = existing_ckpt
             args.eval = True
 
@@ -146,6 +160,9 @@ def main() -> None:
     else:
         ckpt = train_polar(args)
         args.checkpoint_path = ckpt
+        if args.train_only:
+            print("\n[Polar] Training complete. --train_only requested; skipping evaluation.")
+            return
         print("\n[Polar] Training complete. Starting evaluation...")
         evaluate_polar(args)
         maybe_delete_checkpoint(ckpt, bool(args.delete_checkpoint_after_eval))

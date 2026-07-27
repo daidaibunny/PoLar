@@ -53,15 +53,17 @@ def train_polar(args):
 
     # Build datasets (concat across diffs if needed)
     train_datasets = []
+    use_recorded_data_splits = bool(getattr(args, "use_recorded_data_splits", False))
     for mf in merged_files:
         train_indices = None
         train_datasets.append(
             PolarDataset(
                 merged_samples_json=mf,
                 start_idx=0,
-                end_idx=1500 if args.no_validation else 1250,
+                end_idx=(10**18 if use_recorded_data_splits else (1500 if args.no_validation else 1250)),
                 indices=train_indices,
                 original_depth=args.original_depth,
+                split_filter="train" if use_recorded_data_splits else None,
                 drop_original_path_if_shorter_valid=bool(getattr(args, "drop_original_path_if_shorter_valid", False)),
                 keep_original_prob=float(getattr(args, "keep_original_prob", 0.0)),
                 reweight_original_path_if_shorter_valid=bool(getattr(args, "reweight_original_path_if_shorter_valid", False)),
@@ -84,10 +86,11 @@ def train_polar(args):
             val_datasets.append(
                 PolarDataset(
                     merged_samples_json=mf,
-                    start_idx=1250,
-                    end_idx=1500,
+                    start_idx=0 if use_recorded_data_splits else 1250,
+                    end_idx=10**18 if use_recorded_data_splits else 1500,
                     indices=val_indices,
                     original_depth=args.original_depth,
+                    split_filter="validation" if use_recorded_data_splits else None,
                     drop_original_path_if_shorter_valid=bool(getattr(args, "drop_original_path_if_shorter_valid", False)),
                     keep_original_prob=float(getattr(args, "keep_original_prob", 0.0)),
                     reweight_original_path_if_shorter_valid=bool(getattr(args, "reweight_original_path_if_shorter_valid", False)),
