@@ -1,0 +1,32 @@
+captured_at=2026-07-27T02:31:00+00:00
+ssh_alias=gyy1
+hostname=pt-dd090d7d03874545bd60854e93f8ef76-worker-0
+driver_version=535.86.10
+cuda_version=12.4
+
+gpu_index=0
+gpu_name=NVIDIA A800-SXM4-80GB
+memory_total_mib=81920
+memory_used_mib=33527
+gpu_utilization_percent=100
+temperature_celsius=66
+power_watts=384
+
+gpu_index=1
+gpu_name=NVIDIA A800-SXM4-80GB
+memory_total_mib=81920
+memory_used_mib=39329
+gpu_utilization_percent=96
+temperature_celsius=74
+power_watts=388
+
+compute_process_pid=2906849
+compute_process_name=[Not Found]
+compute_process_memory_mib=33772
+
+compute_process_pid=2906850
+compute_process_name=[Not Found]
+compute_process_memory_mib=38552
+
+launch_decision=blocked_for_model_execution
+launch_reason=both assigned GPUs are actively occupied; no process was interrupted
