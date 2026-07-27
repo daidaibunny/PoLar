@@ -3,7 +3,7 @@
 - [x] Read the requested PoLar, CoLa, and DART-Math sources.
 - [x] Fix the upstream PoLar commit and create `reconstruction/mcts-llama`.
 - [x] Restore the upstream `search_space.png` blob interrupted during cloning.
-- [ ] Add a writable user Git remote for milestone pushes.
+- [x] Add a writable user Git remote for milestone pushes.
 - [ ] Capture source, dependency, and GPU manifests.
 - [ ] Build and validate the query-level ReDM-Human split.
 - [ ] Reproduce the frozen LLaMA baseline.
