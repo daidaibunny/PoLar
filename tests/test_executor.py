@@ -16,12 +16,18 @@ class FakeParameter:
 
 
 class FakeInputIds:
-	shape = (1, 3)
+	def __init__(self, batch_size: int = 1, sequence_length: int = 3) -> None:
+		self.shape = (batch_size, sequence_length)
 
 
 class FakeInputs(dict):
-	def __init__(self) -> None:
-		super().__init__(input_ids=FakeInputIds())
+	def __init__(self, batch_size: int = 1, sequence_length: int = 3) -> None:
+		super().__init__(
+			input_ids=FakeInputIds(
+				batch_size=batch_size,
+				sequence_length=sequence_length,
+			),
+		)
 		self.destination = None
 
 	def to(self, destination: str) -> "FakeInputs":
@@ -33,9 +39,16 @@ class FakeTokenizer:
 	def __init__(self) -> None:
 		self.prompts = []
 
-	def __call__(self, prompt: str, return_tensors: str) -> FakeInputs:
-		self.prompts.append((prompt, return_tensors))
-		return FakeInputs()
+	def __call__(
+		self,
+		prompt,
+		return_tensors: str,
+		padding: bool = False,
+	) -> FakeInputs:
+		self.prompts.append((prompt, return_tensors, padding))
+		batch_size = len(prompt) if isinstance(prompt, list) else 1
+		sequence_length = 4 if isinstance(prompt, list) else 3
+		return FakeInputs(batch_size=batch_size, sequence_length=sequence_length)
 
 	@staticmethod
 	def batch_decode(token_rows, skip_special_tokens: bool):
@@ -57,9 +70,11 @@ class FakeModel:
 
 	def generate(self, **kwargs):
 		self.generate_calls.append(kwargs)
+		batch_size, sequence_length = kwargs["input_ids"].shape
+		row_count = batch_size * kwargs.get("num_return_sequences", 1)
 		return [
-			[10, 11, 12, 42],
-			[10, 11, 12, 43],
+			list(range(sequence_length)) + [42 + row_index]
+			for row_index in range(row_count)
 		]
 
 
@@ -124,8 +139,8 @@ class FrozenLayerPathExecutorTest(unittest.TestCase):
 			set_paths,
 			[(model, (0, 1, 3)), (model, (0, 2, 3))],
 		)
-		self.assertEqual(first.generated_answers, ("\\boxed{42}", "\\boxed{43}"))
-		self.assertEqual(second.generated_answers, ("\\boxed{42}", "\\boxed{43}"))
+		self.assertEqual(first.generated_answers, ("\\boxed{42}",))
+		self.assertEqual(second.generated_answers, ("\\boxed{42}",))
 		self.assertEqual(tokenizer.prompts[0][0], build_direct_prompt("What is one?"))
 		self.assertNotIn("system", tokenizer.prompts[0][0].lower())
 		self.assertEqual(
@@ -133,6 +148,47 @@ class FrozenLayerPathExecutorTest(unittest.TestCase):
 			50,
 		)
 		self.assertFalse(model.generate_calls[0]["do_sample"])
+
+	def test_batches_questions_with_one_generation_per_question(self) -> None:
+		model = FakeModel()
+		tokenizer = FakeTokenizer()
+		set_paths = []
+		executor = FrozenLayerPathExecutor(
+			model,
+			tokenizer,
+			path_setter=lambda target, path: set_paths.append((target, tuple(path))),
+		)
+
+		result = executor.generate_batch(
+			["What is one?", "What is two?"],
+			path=(0, 1, 3),
+			settings=GenerationSettings(),
+		)
+
+		self.assertEqual(set_paths, [(model, (0, 1, 3))])
+		self.assertEqual(
+			result.prompts,
+			(
+				build_direct_prompt("What is one?"),
+				build_direct_prompt("What is two?"),
+			),
+		)
+		self.assertEqual(result.generated_answers, ("\\boxed{42}", "\\boxed{43}"))
+		self.assertEqual(tokenizer.prompts[0][1:], ("pt", True))
+		self.assertEqual(model.generate_calls[0]["num_return_sequences"], 1)
+
+	def test_batch_generation_rejects_invalid_or_sampling_inputs(self) -> None:
+		executor = FrozenLayerPathExecutor(FakeModel(), FakeTokenizer())
+
+		with self.assertRaises(ValueError):
+			executor.generate_batch([])
+		with self.assertRaises(TypeError):
+			executor.generate_batch(["Question", 3])
+		with self.assertRaises(ValueError):
+			executor.generate_batch(
+				["Question"],
+				settings=GenerationSettings(do_sample=True, num_return_sequences=2),
+			)
 
 
 if __name__ == "__main__":

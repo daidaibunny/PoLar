@@ -25,6 +25,15 @@ class GenerationBatch:
 	generated_answers: Tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class BatchedGeneration:
+	"""One decoded greedy answer per question for a shared layer path."""
+
+	prompts: Tuple[str, ...]
+	path: LayerPath
+	generated_answers: Tuple[str, ...]
+
+
 def validate_layer_path(path: Sequence[int], original_depth: int) -> LayerPath:
 	"""Return a non-empty in-range integer path suitable for the official patch."""
 	if original_depth <= 0:
@@ -102,6 +111,56 @@ class FrozenLayerPathExecutor:
 		)
 		return GenerationBatch(
 			prompt=prompt,
+			path=canonical_path,
+			generated_answers=answers,
+		)
+
+	def generate_batch(
+		self,
+		questions: Sequence[str],
+		path: Sequence[int] = FULL_PATH,
+		settings: GenerationSettings = GenerationSettings(),
+	) -> BatchedGeneration:
+		"""Generate one answer per question while sharing a single layer path."""
+		if not questions:
+			raise ValueError("questions cannot be empty")
+		if any(not isinstance(question, str) for question in questions):
+			raise TypeError("every question must be a string")
+		if settings.num_return_sequences != 1:
+			raise ValueError(
+				"batched path execution requires num_return_sequences=1",
+			)
+
+		canonical_path = validate_layer_path(path, self.original_depth)
+		self.path_setter(self.model, canonical_path)
+		prompts = tuple(build_direct_prompt(question) for question in questions)
+		model_inputs = self.tokenizer(
+			list(prompts),
+			return_tensors="pt",
+			padding=True,
+		)
+		model_inputs = model_inputs.to(self.model.device)
+		input_length = model_inputs["input_ids"].shape[-1]
+
+		with _inference_context():
+			generated_ids = self.model.generate(
+				**model_inputs,
+				**settings.generate_kwargs(),
+			)
+		if len(generated_ids) != len(questions):
+			raise RuntimeError(
+				"model.generate returned a different number of rows than questions",
+			)
+		new_token_ids = [output_ids[input_length:] for output_ids in generated_ids]
+		answers = tuple(
+			answer.strip()
+			for answer in self.tokenizer.batch_decode(
+				new_token_ids,
+				skip_special_tokens=True,
+			)
+		)
+		return BatchedGeneration(
+			prompts=prompts,
 			path=canonical_path,
 			generated_answers=answers,
 		)

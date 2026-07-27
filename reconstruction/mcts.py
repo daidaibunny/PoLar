@@ -7,6 +7,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import lru_cache
 from typing import Callable, Dict, List, Optional, Tuple
 
 
@@ -125,6 +126,7 @@ def apply_action(path: LayerPath, action: Action) -> LayerPath:
 	return path[: action.start] + block * (action.repeat_count + 1) + path[end:]
 
 
+@lru_cache(maxsize=65_536)
 def enumerate_actions(
 	path: LayerPath,
 	mode: SearchMode,
@@ -236,33 +238,33 @@ class ProgramMCTS:
 		self.original_depth = original_depth
 		self.config = config
 		self.mode = mode
-		self._selection_random = random.Random(config.seed)
+
+	def start_session(self) -> "ProgramMCTSSession":
+		"""Create an ask/tell session suitable for batching model executions."""
+		return ProgramMCTSSession(self)
 
 	def search(
 		self,
 		evaluator: Callable[[LayerPath], EvaluationResult],
 	) -> SearchResult:
 		"""Execute the base path and then up to ``n_simulations`` unique edits."""
-		root_path = tuple(range(self.original_depth))
-		root = self._make_node(root_path)
-		seen = {root_path}
-		evaluations: List[Tuple[LayerPath, EvaluationResult]] = []
-		initial = self._evaluate(root, evaluator, evaluations)
+		session = self.start_session()
+		while True:
+			path = session.request_path()
+			if path is None:
+				break
+			session.record_evaluation(evaluator(path))
+		return session.result()
 
-		completed_simulations = 0
-		for _ in range(self.config.n_simulations):
-			node = root
-			while True:
-				child = self._expand_one(node, seen)
-				if child is not None:
-					result = self._evaluate(child, evaluator, evaluations)
-					self._backpropagate(child, result.binary_reward)
-					completed_simulations += 1
-					break
-				if not node.children:
-					break
-				node = self._select_child(node)
-
+	def _build_result(
+		self,
+		initial: EvaluationResult,
+		evaluations: List[Tuple[LayerPath, EvaluationResult]],
+		completed_simulations: int,
+		root_action_count: int,
+		maximum_tree_depth_reached: int,
+		tree_policy_selection_count: int,
+	) -> SearchResult:
 		valid = tuple(path for path, result in evaluations if result.binary_reward == 1)
 		invalid = tuple(path for path, result in evaluations if result.binary_reward == 0)
 		metadata: Dict[str, object] = {
@@ -270,6 +272,9 @@ class ProgramMCTS:
 			"method_claim": "independent reconstruction",
 			"n_simulations": self.config.n_simulations,
 			"completed_simulations": completed_simulations,
+			"root_action_count": root_action_count,
+			"maximum_tree_depth_reached": maximum_tree_depth_reached,
+			"tree_policy_selection_count": tree_policy_selection_count,
 			"seed": self.config.seed,
 			"ucb_c": self.config.exploration_constant,
 			"exploration_constant": self.config.exploration_constant,
@@ -340,10 +345,10 @@ class ProgramMCTS:
 			return child
 		return None
 
-	def _select_child(self, node: Node) -> Node:
+	def _select_child(self, node: Node, selection_random: random.Random) -> Node:
 		children = tuple(node.children.values())
-		if self._selection_random.random() < self.config.random_action_probability:
-			return self._selection_random.choice(children)
+		if selection_random.random() < self.config.random_action_probability:
+			return selection_random.choice(children)
 		return max(
 			children,
 			key=lambda child: (
@@ -385,6 +390,102 @@ class ProgramMCTS:
 			current.visits += 1
 			current.reward_sum += reward
 			current = current.parent
+
+
+class ProgramMCTSSession:
+	"""Stepwise MCTS state that separates tree decisions from model execution."""
+
+	def __init__(self, search: ProgramMCTS) -> None:
+		self.search = search
+		root_path = tuple(range(search.original_depth))
+		self.root = search._make_node(root_path)
+		self.root_action_count = len(self.root.unexpanded_actions)
+		self.seen = {root_path}
+		self.evaluations: List[Tuple[LayerPath, EvaluationResult]] = []
+		self.initial: Optional[EvaluationResult] = None
+		self.pending_node: Optional[Node] = None
+		self.simulation_attempts = 0
+		self.completed_simulations = 0
+		self.maximum_tree_depth_reached = 0
+		self.tree_policy_selection_count = 0
+		self.selection_random = random.Random(search.config.seed)
+		self.search_exhausted = False
+
+	def request_path(self) -> Optional[LayerPath]:
+		"""Return the next path to execute, or ``None`` when search is complete."""
+		if self.pending_node is not None:
+			raise RuntimeError("record the pending path before requesting another")
+		if self.initial is None:
+			self.pending_node = self.root
+			return self.root.path
+		if self.search_exhausted:
+			return None
+
+		while self.simulation_attempts < self.search.config.n_simulations:
+			self.simulation_attempts += 1
+			node = self.root
+			while True:
+				child = self.search._expand_one(node, self.seen)
+				if child is not None:
+					self.pending_node = child
+					self.maximum_tree_depth_reached = max(
+						self.maximum_tree_depth_reached,
+						_node_depth(child),
+					)
+					return child.path
+				if not node.children:
+					break
+				self.tree_policy_selection_count += 1
+				node = self.search._select_child(node, self.selection_random)
+
+		self.search_exhausted = True
+		return None
+
+	def record_evaluation(self, result: EvaluationResult) -> None:
+		"""Attach one executed reward to the last path returned by ``request_path``."""
+		if self.pending_node is None:
+			raise RuntimeError("no requested path is awaiting an evaluation")
+		node = self.pending_node
+		if node.is_evaluated:
+			raise RuntimeError(f"path was already evaluated: {node.path!r}")
+		node.is_evaluated = True
+		node.binary_reward = result.binary_reward
+		node.generated_answer = result.generated_answer
+		self.evaluations.append((node.path, result))
+		if node is self.root:
+			self.initial = result
+		else:
+			self.search._backpropagate(node, result.binary_reward)
+			self.completed_simulations += 1
+		self.pending_node = None
+
+	def result(self) -> SearchResult:
+		"""Return the complete search result after every requested path is recorded."""
+		if self.pending_node is not None:
+			raise RuntimeError("the pending path has not been recorded")
+		if self.initial is None:
+			raise RuntimeError("the root path has not been evaluated")
+		if not self.search_exhausted:
+			if self.simulation_attempts < self.search.config.n_simulations:
+				raise RuntimeError("search has not reached its simulation budget")
+			self.search_exhausted = True
+		return self.search._build_result(
+			initial=self.initial,
+			evaluations=self.evaluations,
+			completed_simulations=self.completed_simulations,
+			root_action_count=self.root_action_count,
+			maximum_tree_depth_reached=self.maximum_tree_depth_reached,
+			tree_policy_selection_count=self.tree_policy_selection_count,
+		)
+
+
+def _node_depth(node: Node) -> int:
+	depth = 0
+	current = node
+	while current.parent is not None:
+		depth += 1
+		current = current.parent
+	return depth
 
 
 def _mode_accepts(path: LayerPath, mode: SearchMode, original_depth: int) -> bool:

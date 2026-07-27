@@ -113,6 +113,55 @@ class TreePolicyTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             MCTSConfig(max_repeat_count_predictor=2)
 
+    def test_stepwise_session_matches_callback_search(self) -> None:
+        def evaluator(path: tuple[int, ...]) -> EvaluationResult:
+            return EvaluationResult(
+                binary_reward=int(len(path) <= 3),
+                generated_answer=f"path-length={len(path)}",
+            )
+
+        search = ProgramMCTS(
+            original_depth=4,
+            config=MCTSConfig(n_simulations=20, seed=7),
+            mode=SearchMode.PREDICTOR_COMPATIBLE,
+        )
+        direct_result = search.search(evaluator)
+        session = search.start_session()
+        while True:
+            path = session.request_path()
+            if path is None:
+                break
+            session.record_evaluation(evaluator(path))
+
+        self.assertEqual(session.result(), direct_result)
+
+    def test_stepwise_session_requires_each_requested_path_to_be_recorded(self) -> None:
+        session = ProgramMCTS(
+            original_depth=4,
+            config=MCTSConfig(n_simulations=1),
+            mode=SearchMode.PREDICTOR_COMPATIBLE,
+        ).start_session()
+
+        self.assertEqual(session.request_path(), (0, 1, 2, 3))
+        with self.assertRaises(RuntimeError):
+            session.request_path()
+
+    def test_200_predictor_simulations_do_not_reach_beyond_root_expansion(self) -> None:
+        result = ProgramMCTS(
+            original_depth=28,
+            config=MCTSConfig(n_simulations=200, seed=42),
+            mode=SearchMode.PREDICTOR_COMPATIBLE,
+        ).search(
+            lambda path: EvaluationResult(
+                binary_reward=0,
+                generated_answer="\\boxed{0}",
+            ),
+        )
+
+        self.assertGreater(result.search_metadata["root_action_count"], 200)
+        self.assertEqual(result.search_metadata["maximum_tree_depth_reached"], 1)
+        self.assertEqual(result.search_metadata["tree_policy_selection_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
