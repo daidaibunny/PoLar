@@ -1,0 +1,17 @@
+reconstruction_name=PoLar independent reconstruction
+captured_at=2026-07-27T10:29:50+08:00
+official_repository=https://github.com/tianyi-lab/PoLar.git
+official_commit=30d0efde953a5d139e220f61a773c0eaf92d478f
+fork_repository=git@github.com:daidaibunny/PoLar.git
+branch=reconstruction/mcts-llama
+reconstruction_commit=936a7136c3a1e0c47ced8df222a5a6b97492efb2
+polar_2026_paper=https://arxiv.org/abs/2606.06574
+polar_2026_paper_version=arXiv:2606.06574v1
+cola_2025_paper=https://arxiv.org/abs/2507.07996
+dart_math_paper=https://arxiv.org/abs/2407.13690
+dart_math_repository=https://github.com/hkust-nlp/dart-math.git
+base_model=meta-llama/Llama-3.2-3B-Instruct
+mcts_preliminary_defaults=n_simulations:200,length_penalty_lambda:5.0,random_unexplored_probability:0.1
+mcts_preliminary_defaults_source=arXiv:2507.07996 Appendix B
+ucb_c_reconstruction_default=1.41421356237
+ucb_c_status=independent reconstruction choice; not reported by the 2026 paper
