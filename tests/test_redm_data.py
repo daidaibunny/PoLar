@@ -5,6 +5,7 @@ from pathlib import Path
 
 from reconstruction.data import (
     DataIntegrityError,
+	assign_pass_rate_difficulty_bands,
     deduplicate_query_records,
     sha256_file,
     split_level_records,
@@ -121,6 +122,61 @@ class SplitLevelRecordsTest(unittest.TestCase):
         self.assertFalse(train_ids & validation_ids)
         self.assertFalse(train_ids & test_ids)
         self.assertFalse(validation_ids & test_ids)
+
+
+class PassRateDifficultyBandsTest(unittest.TestCase):
+	def test_assigns_equal_bands_from_easiest_to_hardest(self) -> None:
+		records = [
+			{
+				"query_id": f"q{index:02d}",
+				"dart_pass_rate": 1.0 - index / 10,
+			}
+			for index in range(10)
+		]
+
+		bands = assign_pass_rate_difficulty_bands(records, band_count=5)
+
+		self.assertEqual([len(bands[level]) for level in range(1, 6)], [2] * 5)
+		self.assertEqual(
+			[row["query_id"] for row in bands[1]],
+			["q00", "q01"],
+		)
+		self.assertEqual(
+			[row["query_id"] for row in bands[5]],
+			["q08", "q09"],
+		)
+		self.assertTrue(
+			all(
+				row["public_difficulty_level"] == level
+				for level, rows in bands.items()
+				for row in rows
+			),
+		)
+
+	def test_breaks_pass_rate_ties_by_query_id(self) -> None:
+		records = [
+			{"query_id": query_id, "dart_pass_rate": 0.5}
+			for query_id in ("q3", "q1", "q4", "q2")
+		]
+
+		bands = assign_pass_rate_difficulty_bands(records, band_count=2)
+
+		self.assertEqual([row["query_id"] for row in bands[1]], ["q1", "q2"])
+		self.assertEqual([row["query_id"] for row in bands[2]], ["q3", "q4"])
+
+	def test_rejects_duplicate_queries_and_invalid_pass_rates(self) -> None:
+		with self.assertRaises(DataIntegrityError):
+			assign_pass_rate_difficulty_bands(
+				[
+					{"query_id": "q1", "dart_pass_rate": 0.5},
+					{"query_id": "q1", "dart_pass_rate": 0.4},
+				],
+				band_count=2,
+			)
+		with self.assertRaises(DataIntegrityError):
+			assign_pass_rate_difficulty_bands(
+				[{"query_id": "q1", "dart_pass_rate": 1.1}],
+			)
 
 
 class HashTest(unittest.TestCase):

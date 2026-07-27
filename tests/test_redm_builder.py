@@ -7,6 +7,7 @@ from reconstruction.redm_builder import (
 	DatasetSource,
 	SourceFile,
 	build_redm_human,
+	build_redm_public,
 )
 from reconstruction.data import sha256_file
 
@@ -75,6 +76,64 @@ class ReDMHumanBuilderTest(unittest.TestCase):
 
 			with self.assertRaises(FileExistsError):
 				build_redm_human([], [], Path(directory), ())
+
+
+class ReDMPublicBuilderTest(unittest.TestCase):
+	def test_writes_five_equal_pass_rate_difficulty_files(self) -> None:
+		query_info_rows = [
+			{
+				"query_id": f"q{index:02d}",
+				"level": index % 5 + 1,
+				"domain": "Algebra" if index % 2 else "Geometry",
+				"pass_rate": 1.0 - index / 50,
+			}
+			for index in range(50)
+		]
+		pool_rows = [
+			{
+				"query_id": row["query_id"],
+				"query": f"Question {row['query_id']}",
+				"gt_ans": "1",
+			}
+			for row in query_info_rows
+		]
+		source = DatasetSource(
+			repository="example/source",
+			revision="a" * 40,
+			files=(SourceFile("data.parquet", "b" * 64, 100),),
+		)
+
+		with tempfile.TemporaryDirectory() as directory:
+			result = build_redm_public(
+				query_info_rows,
+				pool_rows,
+				Path(directory),
+				(source,),
+			)
+			manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+
+			self.assertEqual(result.unique_questions, 50)
+			self.assertEqual(manifest["dataset_name"], "ReDM-Public")
+			self.assertEqual(manifest["statistics"]["by_public_difficulty"], {
+				str(level): 10 for level in range(1, 6)
+			})
+			all_ids = []
+			for level in range(1, 6):
+				level_path = Path(directory) / f"diff-{level}.json"
+				payload = json.loads(level_path.read_text(encoding="utf-8"))
+				self.assertEqual(payload["difficulty_level"], level)
+				self.assertEqual(payload["split_counts"], {
+					"train": 6,
+					"validation": 1,
+					"test": 3,
+				})
+				all_ids.extend(
+					row["query_id"]
+					for split_name in ("train", "validation", "test")
+					for row in payload[split_name]
+				)
+			self.assertEqual(len(all_ids), 50)
+			self.assertEqual(len(all_ids), len(set(all_ids)))
 
 
 if __name__ == "__main__":

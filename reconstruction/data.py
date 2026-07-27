@@ -131,6 +131,55 @@ def deduplicate_query_records(
 	)
 
 
+def assign_pass_rate_difficulty_bands(
+	records: Sequence[Mapping[str, Any]],
+	band_count: int = 5,
+) -> Dict[int, Tuple[Dict[str, Any], ...]]:
+	"""Split unique queries into equal public difficulty bands by pass rate.
+
+	Band one contains the highest pass rates and is therefore the easiest. The
+	last band contains the lowest pass rates. Query identifiers deterministically
+	break ties so the public reconstruction does not depend on source row order.
+	"""
+	if band_count <= 0:
+		raise ValueError("band_count must be positive")
+	canonical_records = [dict(record) for record in records]
+	_query_ids_are_unique(canonical_records)
+	for record in canonical_records:
+		value = record.get("dart_pass_rate")
+		if isinstance(value, bool):
+			raise DataIntegrityError(f"Invalid DART-Math pass rate: {value!r}")
+		try:
+			pass_rate = float(value)
+		except (TypeError, ValueError) as error:
+			raise DataIntegrityError(
+				f"Invalid DART-Math pass rate: {value!r}",
+			) from error
+		if not math.isfinite(pass_rate) or not 0.0 <= pass_rate <= 1.0:
+			raise DataIntegrityError(f"Invalid DART-Math pass rate: {value!r}")
+		record["dart_pass_rate"] = pass_rate
+
+	canonical_records.sort(
+		key=lambda record: (
+			-record["dart_pass_rate"],
+			_required_string(record, "query_id"),
+		),
+	)
+	band_sizes = _largest_remainder(
+		len(canonical_records),
+		tuple(1.0 for _ in range(band_count)),
+	)
+	bands: Dict[int, Tuple[Dict[str, Any], ...]] = {}
+	offset = 0
+	for level, band_size in enumerate(band_sizes, start=1):
+		band_records = canonical_records[offset : offset + band_size]
+		for record in band_records:
+			record["public_difficulty_level"] = level
+		bands[level] = tuple(band_records)
+		offset += band_size
+	return bands
+
+
 def split_level_records(
 	records: Sequence[Mapping[str, Any]],
 	seed: int = 42,
@@ -287,4 +336,3 @@ def _stable_shuffle(records: List[Dict[str, Any]], seed: int, namespace: str) ->
 	seed_material = f"{seed}:{namespace}".encode("utf-8")
 	derived_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
 	random.Random(derived_seed).shuffle(records)
-
