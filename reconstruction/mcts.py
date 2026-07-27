@@ -77,19 +77,22 @@ class MCTSConfig:
 
 
 @dataclass
-class SearchNode:
+class Node:
 	"""One unique program in the lazily expanded search tree."""
 
 	path: LayerPath
-	parent: Optional["SearchNode"] = None
+	parent: Optional["Node"] = None
 	action: Optional[Action] = None
 	visits: int = 0
 	reward_sum: float = 0.0
 	unexpanded_actions: List[Action] = field(default_factory=list)
-	children: List["SearchNode"] = field(default_factory=list)
+	children: Dict[Action, "Node"] = field(default_factory=dict)
 	is_evaluated: bool = False
 	binary_reward: Optional[int] = None
 	generated_answer: Optional[str] = None
+
+
+SearchNode = Node
 
 
 @dataclass(frozen=True)
@@ -273,9 +276,9 @@ class ProgramMCTS:
 	def _make_node(
 		self,
 		path: LayerPath,
-		parent: Optional[SearchNode] = None,
+		parent: Optional[Node] = None,
 		action: Optional[Action] = None,
-	) -> SearchNode:
+	) -> Node:
 		repeat_limit = (
 			self.config.max_repeat_count_predictor
 			if self.mode == SearchMode.PREDICTOR_COMPATIBLE
@@ -293,14 +296,14 @@ class ProgramMCTS:
 		seed_material = f"{self.config.seed}:{path}".encode("utf-8")
 		shuffle_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
 		random.Random(shuffle_seed).shuffle(actions)
-		return SearchNode(
+		return Node(
 			path=path,
 			parent=parent,
 			action=action,
 			unexpanded_actions=actions,
 		)
 
-	def _expand_one(self, node: SearchNode, seen: set[LayerPath]) -> Optional[SearchNode]:
+	def _expand_one(self, node: Node, seen: set[LayerPath]) -> Optional[Node]:
 		while node.unexpanded_actions:
 			action = node.unexpanded_actions.pop()
 			path = apply_action(node.path, action)
@@ -308,15 +311,16 @@ class ProgramMCTS:
 				continue
 			seen.add(path)
 			child = self._make_node(path, parent=node, action=action)
-			node.children.append(child)
+			node.children[action] = child
 			return child
 		return None
 
-	def _select_child(self, node: SearchNode) -> SearchNode:
+	def _select_child(self, node: Node) -> Node:
+		children = tuple(node.children.values())
 		if self._selection_random.random() < self.config.random_action_probability:
-			return self._selection_random.choice(node.children)
+			return self._selection_random.choice(children)
 		return max(
-			node.children,
+			children,
 			key=lambda child: (
 				ucb_score(
 					reward_sum=child.reward_sum,
@@ -333,7 +337,7 @@ class ProgramMCTS:
 
 	@staticmethod
 	def _evaluate(
-		node: SearchNode,
+		node: Node,
 		evaluator: Callable[[LayerPath], EvaluationResult],
 		evaluations: List[Tuple[LayerPath, EvaluationResult]],
 	) -> EvaluationResult:
@@ -350,8 +354,8 @@ class ProgramMCTS:
 		return result
 
 	@staticmethod
-	def _backpropagate(node: SearchNode, reward: int) -> None:
-		current: Optional[SearchNode] = node
+	def _backpropagate(node: Node, reward: int) -> None:
+		current: Optional[Node] = node
 		while current is not None:
 			current.visits += 1
 			current.reward_sum += reward
@@ -364,4 +368,3 @@ def _mode_accepts(path: LayerPath, mode: SearchMode, original_depth: int) -> boo
 	if mode == SearchMode.PREDICTOR_COMPATIBLE:
 		return is_predictor_compatible_path(path, original_depth)
 	raise ValueError(f"Unsupported search mode: {mode!r}")
-

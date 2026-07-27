@@ -6,7 +6,9 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
+
+from reconstruction.mcts import EvaluationResult, LayerPath
 
 
 class CacheFormatError(ValueError):
@@ -104,6 +106,62 @@ class JsonlEvaluationCache:
 				self._entries[key] = evaluation
 
 
+class CachedPathEvaluator:
+	"""Call an executor at most once per complete question and path identity."""
+
+	def __init__(
+		self,
+		cache: JsonlEvaluationCache,
+		question_id: str,
+		model_id: str,
+		model_revision: str,
+		tokenizer_revision: str,
+		prompt_hash: str,
+		generation_config_hash: str,
+		execute: Callable[[LayerPath], EvaluationResult],
+	) -> None:
+		self.cache = cache
+		self.question_id = question_id
+		self.model_id = model_id
+		self.model_revision = model_revision
+		self.tokenizer_revision = tokenizer_revision
+		self.prompt_hash = prompt_hash
+		self.generation_config_hash = generation_config_hash
+		self.execute = execute
+		self.cache_hits = 0
+		self.cache_misses = 0
+
+	def __call__(self, path: LayerPath) -> EvaluationResult:
+		"""Replay an exact cached result or execute and append a new result."""
+		identity = CacheIdentity(
+			question_id=self.question_id,
+			path=path,
+			model_id=self.model_id,
+			model_revision=self.model_revision,
+			tokenizer_revision=self.tokenizer_revision,
+			prompt_hash=self.prompt_hash,
+			generation_config_hash=self.generation_config_hash,
+		)
+		cached = self.cache.get(identity)
+		if cached is not None:
+			self.cache_hits += 1
+			return EvaluationResult(
+				binary_reward=cached.binary_reward,
+				generated_answer=cached.generated_answer,
+			)
+
+		self.cache_misses += 1
+		result = self.execute(path)
+		self.cache.put(
+			CachedEvaluation(
+				identity=identity,
+				binary_reward=result.binary_reward,
+				generated_answer=result.generated_answer,
+			),
+		)
+		return result
+
+
 def _identity_payload(identity: CacheIdentity) -> Dict[str, object]:
 	payload = asdict(identity)
 	payload["path"] = list(identity.path)
@@ -125,4 +183,3 @@ def _evaluation_from_payload(payload: Dict[str, object]) -> CachedEvaluation:
 def _validate_evaluation(evaluation: CachedEvaluation) -> None:
 	if evaluation.binary_reward not in (0, 1):
 		raise ValueError("binary_reward must be exactly 0 or 1")
-

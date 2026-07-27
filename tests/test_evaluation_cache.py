@@ -5,9 +5,11 @@ from pathlib import Path
 from reconstruction.cache import (
     CacheIdentity,
     CachedEvaluation,
+    CachedPathEvaluator,
     JsonlEvaluationCache,
     make_cache_key,
 )
+from reconstruction.mcts import EvaluationResult
 
 
 class CacheKeyTest(unittest.TestCase):
@@ -45,6 +47,32 @@ class CacheKeyTest(unittest.TestCase):
 
             self.assertEqual(reloaded.get(self.identity), evaluation)
             self.assertFalse(reloaded.put(evaluation))
+
+    def test_cached_path_evaluator_replays_without_calling_executor(self) -> None:
+        calls = []
+
+        def execute(path: tuple[int, ...]) -> EvaluationResult:
+            calls.append(path)
+            return EvaluationResult(binary_reward=1, generated_answer="\\boxed{42}")
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "cache.jsonl"
+            arguments = {
+                "question_id": "q1",
+                "model_id": "model",
+                "model_revision": "model-revision",
+                "tokenizer_revision": "tokenizer-revision",
+                "prompt_hash": "prompt-hash",
+                "generation_config_hash": "generation-hash",
+                "execute": execute,
+            }
+            first = CachedPathEvaluator(JsonlEvaluationCache(cache_path), **arguments)
+
+            self.assertEqual(first((0, 1)).binary_reward, 1)
+            second = CachedPathEvaluator(JsonlEvaluationCache(cache_path), **arguments)
+            self.assertEqual(second((0, 1)).binary_reward, 1)
+            self.assertEqual(calls, [(0, 1)])
+            self.assertEqual(second.cache_hits, 1)
 
 
 if __name__ == "__main__":
