@@ -7,7 +7,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 LayerPath = Tuple[int, ...]
@@ -72,8 +72,16 @@ class MCTSConfig:
 			raise ValueError("n_simulations must be non-negative")
 		if not 0.0 <= self.random_action_probability <= 1.0:
 			raise ValueError("random_action_probability must be in [0, 1]")
+		if self.exploration_constant < 0:
+			raise ValueError("exploration_constant must be non-negative")
+		if self.length_penalty_lambda < 0:
+			raise ValueError("length_penalty_lambda must be non-negative")
 		if self.max_block_length <= 0:
 			raise ValueError("max_block_length must be positive")
+		if self.max_repeat_count_diagnostic <= 0:
+			raise ValueError("max_repeat_count_diagnostic must be positive")
+		if self.max_repeat_count_predictor != 1:
+			raise ValueError("max_repeat_count_predictor must be exactly one")
 
 
 @dataclass
@@ -150,7 +158,11 @@ def is_predictor_compatible_path(path: LayerPath, original_depth: int) -> bool:
 	Each block is skipped, kept once, or executed exactly twice. This permits one
 	extra execution but rejects arbitrary reordering and deeper repeats.
 	"""
-	if original_depth < 0 or any(layer < 0 or layer >= original_depth for layer in path):
+	if (
+		not path
+		or original_depth <= 0
+		or any(layer < 0 or layer >= original_depth for layer in path)
+	):
 		return False
 	memo: Dict[Tuple[int, int], bool] = {}
 
@@ -255,15 +267,28 @@ class ProgramMCTS:
 		invalid = tuple(path for path, result in evaluations if result.binary_reward == 0)
 		metadata: Dict[str, object] = {
 			"mode": self.mode.value,
+			"method_claim": "independent reconstruction",
 			"n_simulations": self.config.n_simulations,
 			"completed_simulations": completed_simulations,
 			"seed": self.config.seed,
+			"ucb_c": self.config.exploration_constant,
 			"exploration_constant": self.config.exploration_constant,
 			"exploration_constant_source": "independent reconstruction choice",
 			"length_penalty_lambda": self.config.length_penalty_lambda,
 			"length_penalty_source": "CoLa 2025 preliminary default",
+			"random_exploration": self.config.random_action_probability,
 			"random_action_probability": self.config.random_action_probability,
 			"random_action_probability_source": "CoLa 2025 preliminary default",
+			"simulation_count_source": "CoLa 2025 preliminary default",
+			"ucb_parent_visit_definition": "immediate parent node visits",
+			"simulation_definition": "one complete path execution with greedy decoding",
+			"reward_definition": "binary DART-Math answer correctness",
+			"max_block_length": self.config.max_block_length,
+			"max_repeat_count": (
+				self.config.max_repeat_count_predictor
+				if self.mode == SearchMode.PREDICTOR_COMPATIBLE
+				else self.config.max_repeat_count_diagnostic
+			),
 		}
 		return SearchResult(
 			initial_score=initial.binary_reward,

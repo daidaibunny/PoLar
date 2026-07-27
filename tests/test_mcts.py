@@ -56,6 +56,7 @@ class PredictorCompatibilityTest(unittest.TestCase):
     def test_rejects_deep_repeat_and_reordering(self) -> None:
         self.assertFalse(is_predictor_compatible_path((0, 1, 1, 1, 2, 3), 4))
         self.assertFalse(is_predictor_compatible_path((0, 2, 1, 3), 4))
+        self.assertFalse(is_predictor_compatible_path((), 4))
 
 
 class TreePolicyTest(unittest.TestCase):
@@ -101,6 +102,16 @@ class TreePolicyTest(unittest.TestCase):
         self.assertTrue(result.valid_programs)
         self.assertTrue(any(2 not in path for path in result.valid_programs))
         self.assertEqual(result.search_metadata["n_simulations"], 20)
+        self.assertEqual(result.search_metadata["ucb_c"], math.sqrt(2))
+        self.assertEqual(result.search_metadata["random_exploration"], 0.1)
+        self.assertEqual(
+            result.search_metadata["ucb_parent_visit_definition"],
+            "immediate parent node visits",
+        )
+
+    def test_predictor_repeat_limit_cannot_drift_from_official_parser(self) -> None:
+        with self.assertRaises(ValueError):
+            MCTSConfig(max_repeat_count_predictor=2)
 
 
 if __name__ == "__main__":
