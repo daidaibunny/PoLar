@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run all five public Predictor-compatible MCTS label shards on two CUDA GPUs."""
+"""Run public Predictor-compatible MCTS labels on both or one assigned CUDA shard."""
 
 from __future__ import annotations
 
@@ -86,6 +86,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 	parser.add_argument("--model-revision", required=True)
 	parser.add_argument("--batch-size", type=int, required=True)
 	parser.add_argument("--repository-root", type=Path, default=REPOSITORY_ROOT)
+	parser.add_argument(
+		"--only-shard",
+		type=int,
+		choices=GPU_IDS,
+		help=(
+			"Run only the selected fixed GPU/shard mapping. This permits staggered "
+			"execution without touching the other physical GPU."
+		),
+	)
 	parser.add_argument("--resume", action="store_true")
 	arguments = parser.parse_args(argv)
 	if not re.fullmatch(r"[0-9a-f]{40}", arguments.model_revision):
@@ -116,7 +125,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 	)
 	if not model_snapshot.is_dir():
 		raise RuntimeError(f"pinned model snapshot is missing: {model_snapshot}")
-	gpu_state = _validate_idle_a800_pair()
+	selected_gpu_ids = (
+		GPU_IDS if arguments.only_shard is None else (arguments.only_shard,)
+	)
+	gpu_state = _validate_idle_a800_gpus(selected_gpu_ids)
 	data_manifest = _validate_public_data(repository_root)
 	commit = subprocess.check_output(
 		["git", "rev-parse", "HEAD"],
@@ -132,6 +144,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		"tokenizer_revision": arguments.model_revision,
 		"parallelism": "two independent CUDA model replicas with question sharding",
 		"physical_gpu_to_shard": {"0": 0, "1": 1},
+		"staggered_shard_launch_supported": True,
 		"gpu_state_before_launch": gpu_state,
 		"batch_size": arguments.batch_size,
 		"seed": 42,
@@ -157,7 +170,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 	}
 	_write_or_validate_manifest(output_root, manifest, arguments.resume)
 
-	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+	with concurrent.futures.ThreadPoolExecutor(
+		max_workers=len(selected_gpu_ids),
+	) as executor:
 		futures = [
 			executor.submit(
 				_run_gpu_shard,
@@ -168,10 +183,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 				model_revision=arguments.model_revision,
 				batch_size=arguments.batch_size,
 			)
-			for gpu_id in GPU_IDS
+			for gpu_id in selected_gpu_ids
 		]
 		for future in futures:
 			future.result()
+
+	if arguments.only_shard is not None:
+		print(
+			json.dumps(
+				{
+					"status": "shard_complete",
+					"completed_shard": arguments.only_shard,
+					"output_root": str(output_root),
+				},
+				sort_keys=True,
+			),
+			flush=True,
+		)
+		return 0
 
 	for difficulty in range(1, 6):
 		_merge_difficulty(
@@ -185,21 +214,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 	return 0
 
 
-def _validate_idle_a800_pair() -> Tuple[Dict[str, str], ...]:
+def _validate_idle_a800_gpus(
+	gpu_ids: Sequence[int],
+) -> Tuple[Dict[str, str], ...]:
+	"""Require only the selected physical A800 GPUs to be completely idle."""
+	if not gpu_ids or any(gpu_id not in GPU_IDS for gpu_id in gpu_ids):
+		raise ValueError(f"gpu_ids must be a non-empty subset of {GPU_IDS}")
 	query = subprocess.check_output(
 		[
 			"nvidia-smi",
-			"--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu",
+			"--query-gpu=index,uuid,name,memory.total,memory.used,memory.free,"
+			"utilization.gpu",
 			"--format=csv,noheader,nounits",
 		],
 		text=True,
 	)
 	rows = []
 	for line in query.splitlines():
-		index, name, total, used, free, utilization = [item.strip() for item in line.split(",")]
+		index, uuid, name, total, used, free, utilization = [
+			item.strip() for item in line.split(",")
+		]
 		rows.append(
 			{
 				"index": index,
+				"uuid": uuid,
 				"name": name,
 				"memory_total_mib": total,
 				"memory_used_mib": used,
@@ -209,19 +247,42 @@ def _validate_idle_a800_pair() -> Tuple[Dict[str, str], ...]:
 		)
 	if len(rows) != 2 or any("A800-SXM4-80GB" not in row["name"] for row in rows):
 		raise RuntimeError(f"expected exactly two A800-SXM4-80GB GPUs, found {rows}")
-	processes = subprocess.run(
+	process_output = subprocess.run(
 		[
 			"nvidia-smi",
-			"--query-compute-apps=pid,process_name,used_gpu_memory",
+			"--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
 			"--format=csv,noheader",
 		],
 		text=True,
 		capture_output=True,
 		check=True,
 	).stdout.strip()
-	if processes:
-		raise RuntimeError(f"refusing to launch while GPU compute processes exist: {processes}")
-	return tuple(rows)
+	processes = process_output.splitlines()
+	selected_rows = []
+	for gpu_id in gpu_ids:
+		target = next(
+			(row for row in rows if int(row["index"]) == gpu_id),
+			None,
+		)
+		if target is None:
+			raise RuntimeError(f"physical GPU {gpu_id} is unavailable")
+		target_processes = [
+			line
+			for line in processes
+			if line.startswith(target["uuid"] + ",")
+		]
+		if target_processes:
+			raise RuntimeError(
+				f"refusing to launch while physical GPU {gpu_id} has compute "
+				f"processes: {target_processes}",
+			)
+		if int(target["memory_used_mib"]) > 64:
+			raise RuntimeError(
+				f"refusing to launch while physical GPU {gpu_id} uses "
+				f"{target['memory_used_mib']} MiB",
+			)
+		selected_rows.append(target)
+	return tuple(selected_rows)
 
 
 def _validate_public_data(repository_root: Path) -> Dict[str, Dict[str, object]]:

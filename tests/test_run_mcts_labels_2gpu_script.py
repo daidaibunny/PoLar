@@ -1,7 +1,12 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.run_mcts_labels_2gpu import build_label_command
+from scripts.run_mcts_labels_2gpu import (
+	_validate_idle_a800_gpus,
+	build_label_command,
+	parse_args,
+)
 
 
 class TwoGpuLabelCommandTest(unittest.TestCase):
@@ -28,6 +33,51 @@ class TwoGpuLabelCommandTest(unittest.TestCase):
 		self.assertIn("--num-shards 2 --shard-index 1", joined)
 		self.assertIn("--max-samples 1125", joined)
 		self.assertIn("--batch-size 32 --search-width 32", joined)
+
+	def test_accepts_one_fixed_shard_for_staggered_execution(self) -> None:
+		arguments = parse_args(
+			[
+				"--output-root",
+				"/new/output",
+				"--model-revision",
+				"a" * 40,
+				"--batch-size",
+				"192",
+				"--only-shard",
+				"0",
+			],
+		)
+
+		self.assertEqual(arguments.only_shard, 0)
+
+	@patch("scripts.run_mcts_labels_2gpu.subprocess.run")
+	@patch("scripts.run_mcts_labels_2gpu.subprocess.check_output")
+	def test_selected_idle_gpu_ignores_a_busy_unselected_gpu(
+		self,
+		check_output,
+		run,
+	) -> None:
+		check_output.return_value = (
+			"0, uuid-0, NVIDIA A800-SXM4-80GB, 81920, 2, 81918, 0\n"
+			"1, uuid-1, NVIDIA A800-SXM4-80GB, 81920, 33000, 48920, 100\n"
+		)
+		run.return_value.stdout = "uuid-1, 456, python, 32990 MiB\n"
+
+		state = _validate_idle_a800_gpus((0,))
+
+		self.assertEqual(tuple(row["index"] for row in state), ("0",))
+
+	@patch("scripts.run_mcts_labels_2gpu.subprocess.run")
+	@patch("scripts.run_mcts_labels_2gpu.subprocess.check_output")
+	def test_rejects_a_busy_selected_gpu(self, check_output, run) -> None:
+		check_output.return_value = (
+			"0, uuid-0, NVIDIA A800-SXM4-80GB, 81920, 33000, 48920, 100\n"
+			"1, uuid-1, NVIDIA A800-SXM4-80GB, 81920, 2, 81918, 0\n"
+		)
+		run.return_value.stdout = "uuid-0, 123, python, 32990 MiB\n"
+
+		with self.assertRaises(RuntimeError):
+			_validate_idle_a800_gpus((0,))
 
 
 if __name__ == "__main__":
