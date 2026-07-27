@@ -149,6 +149,47 @@ def build_resume_command(
 	)
 
 
+def claim_one_shot_trigger(
+	state_path: Path,
+	command: Sequence[str],
+	gpu_index: int,
+) -> None:
+	"""Atomically claim the only permitted launch attempt for this monitor."""
+	state_path = Path(state_path)
+	state_path.parent.mkdir(parents=True, exist_ok=True)
+	payload = {
+		"status": "launch_attempted",
+		"gpu_index": gpu_index,
+		"command": tuple(command),
+		"claimed_at_utc": datetime.now(timezone.utc).isoformat(),
+	}
+	try:
+		with state_path.open("x", encoding="utf-8") as destination:
+			json.dump(payload, destination, indent=2, sort_keys=True)
+			destination.write("\n")
+			destination.flush()
+			os.fsync(destination.fileno())
+	except FileExistsError:
+		raise RuntimeError(
+			f"one-shot launch was already claimed according to {state_path}",
+		) from None
+
+
+def _record_trigger_result(state_path: Path, returncode: int) -> None:
+	"""Record completion without removing the permanent one-shot claim."""
+	payload = json.loads(state_path.read_text(encoding="utf-8"))
+	payload["status"] = "completed" if returncode == 0 else "failed"
+	payload["returncode"] = returncode
+	payload["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+	temporary_path = state_path.with_name(f"{state_path.name}.tmp.{os.getpid()}")
+	with temporary_path.open("x", encoding="utf-8") as destination:
+		json.dump(payload, destination, indent=2, sort_keys=True)
+		destination.write("\n")
+		destination.flush()
+		os.fsync(destination.fileno())
+	os.replace(temporary_path, state_path)
+
+
 def _emit_status(payload: dict) -> None:
 	payload = {
 		"timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -181,6 +222,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 	parser.add_argument("--max-memory-used-mib", type=int, default=64)
 	parser.add_argument("--max-utilization-percent", type=int, default=5)
 	parser.add_argument("--lock-path", type=Path, required=True)
+	parser.add_argument("--state-path", type=Path, required=True)
 	arguments = parser.parse_args(argv)
 	if arguments.batch_size <= 0:
 		parser.error("--batch-size must be positive")
@@ -215,42 +257,36 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 	)
 	lock_stream = _acquire_lock(arguments.lock_path.resolve())
 	try:
-		while True:
-			wait_for_sustained_idle(
-				query_state=lambda: query_gpu_state(arguments.gpu_index),
-				required_idle_checks=arguments.required_idle_checks,
-				poll_seconds=arguments.poll_seconds,
-				max_memory_used_mib=arguments.max_memory_used_mib,
-				max_utilization_percent=arguments.max_utilization_percent,
-				status_callback=_emit_status,
+		state_path = arguments.state_path.resolve()
+		if state_path.exists():
+			raise RuntimeError(
+				f"one-shot launch was already claimed according to {state_path}",
 			)
-			_emit_status({"event": "launch_attempt", "command": command})
-			result = subprocess.run(
-				command,
-				cwd=repository_root,
-				env=environment,
-				check=False,
-			)
-			if result.returncode == 0:
-				_emit_status({"event": "shard_complete", "gpu_index": arguments.gpu_index})
-				return 0
-			state = query_gpu_state(arguments.gpu_index)
-			if is_safely_idle(
-				state,
-				arguments.max_memory_used_mib,
-				arguments.max_utilization_percent,
-			):
-				_emit_status(
-					{"event": "launch_failed_while_gpu_idle", "returncode": result.returncode},
-				)
-				return result.returncode
-			_emit_status(
-				{
-					"event": "launch_race_gpu_became_busy",
-					"returncode": result.returncode,
-					"state": asdict(state),
-				},
-			)
+		wait_for_sustained_idle(
+			query_state=lambda: query_gpu_state(arguments.gpu_index),
+			required_idle_checks=arguments.required_idle_checks,
+			poll_seconds=arguments.poll_seconds,
+			max_memory_used_mib=arguments.max_memory_used_mib,
+			max_utilization_percent=arguments.max_utilization_percent,
+			status_callback=_emit_status,
+		)
+		claim_one_shot_trigger(state_path, command, arguments.gpu_index)
+		_emit_status({"event": "one_shot_launch_attempt", "command": command})
+		result = subprocess.run(
+			command,
+			cwd=repository_root,
+			env=environment,
+			check=False,
+		)
+		_record_trigger_result(state_path, result.returncode)
+		_emit_status(
+			{
+				"event": "one_shot_launch_finished",
+				"gpu_index": arguments.gpu_index,
+				"returncode": result.returncode,
+			},
+		)
+		return result.returncode
 	finally:
 		lock_stream.close()
 

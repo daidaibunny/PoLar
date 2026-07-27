@@ -1,10 +1,12 @@
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
 from scripts.wait_for_idle_gpu_and_launch import (
 	GpuState,
 	build_resume_command,
+	claim_one_shot_trigger,
 	is_safely_idle,
 	wait_for_sustained_idle,
 )
@@ -61,6 +63,16 @@ class WaitForIdleGpuAndLaunchTest(unittest.TestCase):
 		self.assertIn("--only-shard", command)
 		self.assertEqual(command[command.index("--only-shard") + 1], "1")
 		self.assertIn("--resume", command)
+
+	def test_one_shot_trigger_cannot_be_claimed_twice(self) -> None:
+		with TemporaryDirectory() as directory:
+			state_path = Path(directory) / "gpu-1-trigger.json"
+			claim_one_shot_trigger(state_path, ("python", "run.py"), gpu_index=1)
+
+			with self.assertRaises(RuntimeError):
+				claim_one_shot_trigger(state_path, ("python", "run.py"), gpu_index=1)
+
+			self.assertIn('"status": "launch_attempted"', state_path.read_text())
 
 
 if __name__ == "__main__":
