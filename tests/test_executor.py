@@ -177,6 +177,25 @@ class FrozenLayerPathExecutorTest(unittest.TestCase):
 		self.assertEqual(tokenizer.prompts[0][1:], ("pt", True))
 		self.assertEqual(model.generate_calls[0]["num_return_sequences"], 1)
 
+	def test_reuses_identical_batched_model_inputs_across_layer_paths(self) -> None:
+		model = FakeModel()
+		tokenizer = FakeTokenizer()
+		executor = FrozenLayerPathExecutor(
+			model,
+			tokenizer,
+			path_setter=lambda target, path: None,
+		)
+		questions = ["What is one?", "What is two?"]
+
+		executor.generate_batch(questions, path=(0, 1, 2))
+		executor.generate_batch(questions, path=(0, 1, 1, 2))
+
+		self.assertEqual(len(tokenizer.prompts), 1)
+		self.assertIs(
+			model.generate_calls[0]["input_ids"],
+			model.generate_calls[1]["input_ids"],
+		)
+
 	def test_batch_generation_rejects_invalid_or_sampling_inputs(self) -> None:
 		executor = FrozenLayerPathExecutor(FakeModel(), FakeTokenizer())
 

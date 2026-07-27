@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from types import SimpleNamespace
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from reconstruction.mcts import EvaluationResult
 
@@ -95,17 +96,7 @@ def score_math_generation(
 	"""Score a boxed generation with the unmodified DART-Math evaluator."""
 	if "oxed{" not in generated_answer:
 		return EvaluationResult(binary_reward=0, generated_answer=generated_answer)
-	try:
-		from dart_math.eval import EvaluatorMath
-	except ImportError as error:
-		raise RuntimeError(
-			"The official DART-Math evaluator dependencies are not installed",
-		) from error
-
-	evaluator = EvaluatorMath(
-		strict_extract=True,
-		use_orig_eq_for_olympiadbench=True,
-	)
+	evaluator = _official_math_evaluator()
 	sample = SimpleNamespace(
 		resp=generated_answer,
 		ref_ans=ground_truth,
@@ -122,6 +113,21 @@ def score_math_generation(
 	return EvaluationResult(
 		binary_reward=int(correct),
 		generated_answer=generated_answer,
+	)
+
+
+@lru_cache(maxsize=1)
+def _official_math_evaluator() -> Any:
+	"""Reuse the stateless official evaluator across deterministic score calls."""
+	try:
+		from dart_math.eval import EvaluatorMath
+	except ImportError as error:
+		raise RuntimeError(
+			"The official DART-Math evaluator dependencies are not installed",
+		) from error
+	return EvaluatorMath(
+		strict_extract=True,
+		use_orig_eq_for_olympiadbench=True,
 	)
 
 

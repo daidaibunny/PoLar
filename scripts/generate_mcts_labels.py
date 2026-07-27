@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -79,6 +80,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def resolve_model_revision(model_id: str, requested_revision: Optional[str]) -> str:
 	"""Resolve a model reference to an immutable Hugging Face commit SHA."""
+	if requested_revision and re.fullmatch(r"[0-9a-f]{40}", requested_revision):
+		return requested_revision
 	try:
 		from huggingface_hub import HfApi
 
@@ -168,6 +171,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 			),
 			flush=True,
 		)
+	cache.close()
 
 	elapsed_seconds = time.monotonic() - start_time
 	peak_memory_bytes = _peak_gpu_memory_bytes(arguments.device)

@@ -1,10 +1,15 @@
 import unittest
 from pathlib import Path
 
-from scripts.generate_mcts_labels import parse_args
+from scripts.generate_mcts_labels import parse_args, resolve_model_revision
 
 
 class GenerateMctsLabelsCliTest(unittest.TestCase):
+	def test_accepts_an_immutable_revision_without_network_resolution(self) -> None:
+		revision = "a" * 40
+
+		self.assertEqual(resolve_model_revision("model", revision), revision)
+
 	def test_defaults_to_training_and_validation_predictor_search(self) -> None:
 		arguments = parse_args(
 			[

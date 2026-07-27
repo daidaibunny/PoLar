@@ -103,6 +103,42 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 		self.assertEqual(second.cache_hits, 6)
 		self.assertEqual(second.cache_misses, 0)
 
+	def test_reuses_scores_for_identical_question_answer_pairs(self) -> None:
+		calls = []
+
+		def repeated_answer_score(question, ground_truth, generated_answer):
+			calls.append((question, ground_truth, generated_answer))
+			return EvaluationResult(
+				binary_reward=1,
+				generated_answer=generated_answer,
+			)
+
+		class RepeatedAnswerExecutor(FakeBatchExecutor):
+			def generate_batch(self, questions, path, settings):
+				self.calls.append((tuple(questions), tuple(path), settings))
+				return BatchedGeneration(
+					prompts=tuple(f"prompt:{question}" for question in questions),
+					path=tuple(path),
+					generated_answers=tuple("\\boxed{1}" for _ in questions),
+				)
+
+		with tempfile.TemporaryDirectory() as directory:
+			generate_mcts_records(
+				samples=self.samples,
+				executor=RepeatedAnswerExecutor(),
+				cache=JsonlEvaluationCache(Path(directory) / "cache.jsonl"),
+				search_config=self.search_config,
+				search_mode=SearchMode.PREDICTOR_COMPATIBLE,
+				model_id="model",
+				model_revision="model-revision",
+				tokenizer_revision="tokenizer-revision",
+				batch_size=2,
+				score_generation=repeated_answer_score,
+				original_depth=4,
+			)
+
+		self.assertEqual(len(calls), 2)
+
 	def test_rejects_invalid_batch_and_duplicate_question_ids(self) -> None:
 		with tempfile.TemporaryDirectory() as directory:
 			arguments = {

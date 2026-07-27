@@ -81,6 +81,9 @@ class FrozenLayerPathExecutor:
 		self.tokenizer = tokenizer
 		self.original_depth = original_depth
 		self.path_setter = path_setter or _official_path_setter
+		self._cached_batch_key: Optional[Tuple[str, ...]] = None
+		self._cached_batch_prompts: Optional[Tuple[str, ...]] = None
+		self._cached_batch_inputs: Any = None
 
 	def generate(
 		self,
@@ -133,13 +136,8 @@ class FrozenLayerPathExecutor:
 
 		canonical_path = validate_layer_path(path, self.original_depth)
 		self.path_setter(self.model, canonical_path)
-		prompts = tuple(build_direct_prompt(question) for question in questions)
-		model_inputs = self.tokenizer(
-			list(prompts),
-			return_tensors="pt",
-			padding=True,
-		)
-		model_inputs = model_inputs.to(self.model.device)
+		question_key = tuple(questions)
+		prompts, model_inputs = self._get_batched_model_inputs(question_key)
 		input_length = model_inputs["input_ids"].shape[-1]
 
 		with _inference_context():
@@ -164,6 +162,24 @@ class FrozenLayerPathExecutor:
 			path=canonical_path,
 			generated_answers=answers,
 		)
+
+	def _get_batched_model_inputs(
+		self,
+		questions: Tuple[str, ...],
+	) -> Tuple[Tuple[str, ...], Any]:
+		"""Reuse exact token tensors while one question batch traverses many paths."""
+		if questions == self._cached_batch_key:
+			return self._cached_batch_prompts, self._cached_batch_inputs
+		prompts = tuple(build_direct_prompt(question) for question in questions)
+		model_inputs = self.tokenizer(
+			list(prompts),
+			return_tensors="pt",
+			padding=True,
+		).to(self.model.device)
+		self._cached_batch_key = questions
+		self._cached_batch_prompts = prompts
+		self._cached_batch_inputs = model_inputs
+		return prompts, model_inputs
 
 	def final_prompt_logits(
 		self,

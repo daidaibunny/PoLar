@@ -143,6 +143,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		"random_action_probability": 0.1,
 		"max_block_length": 4,
 		"max_repeat_count_predictor": 1,
+		"lossless_optimizations": [
+			"reuse_exact_batch_token_tensors",
+			"reuse_prompt_hashes",
+			"reuse_official_math_evaluator",
+			"memoize_identical_scoring_inputs",
+			"reuse_flush_per_record_cache_stream",
+			"skip_network_lookup_for_pinned_revision",
+		],
 		"splits": ["train", "validation"],
 		"samples_per_difficulty": EXPECTED_SAMPLES_PER_DIFFICULTY,
 		"data_files": data_manifest,
@@ -247,6 +255,7 @@ def _write_or_validate_manifest(
 			"batch_size",
 			"seed",
 			"n_simulations",
+			"lossless_optimizations",
 			"data_files",
 		):
 			if stored.get(key) != manifest.get(key):

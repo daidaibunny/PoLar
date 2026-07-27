@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, TextIO, Tuple
 
 from reconstruction.mcts import EvaluationResult, LayerPath
 
@@ -50,6 +50,7 @@ class JsonlEvaluationCache:
 	def __init__(self, path: Path) -> None:
 		self.path = Path(path)
 		self._entries: Dict[str, CachedEvaluation] = {}
+		self._append_stream: Optional[TextIO] = None
 		self._load()
 
 	def get(self, identity: CacheIdentity) -> Optional[CachedEvaluation]:
@@ -66,18 +67,35 @@ class JsonlEvaluationCache:
 				raise CacheFormatError(f"Conflicting cache values for key={key}")
 			return False
 
-		self.path.parent.mkdir(parents=True, exist_ok=True)
 		payload = {
 			"key": key,
 			"identity": _identity_payload(evaluation.identity),
 			"binary_reward": evaluation.binary_reward,
 			"generated_answer": evaluation.generated_answer,
 		}
-		with self.path.open("a", encoding="utf-8") as destination:
-			destination.write(json.dumps(payload, sort_keys=True) + "\n")
-			destination.flush()
+		if self._append_stream is None:
+			self.path.parent.mkdir(parents=True, exist_ok=True)
+			self._append_stream = self.path.open("a", encoding="utf-8")
+		self._append_stream.write(json.dumps(payload, sort_keys=True) + "\n")
+		self._append_stream.flush()
 		self._entries[key] = evaluation
 		return True
+
+	def close(self) -> None:
+		"""Close the reusable append stream after every record has been flushed."""
+		if self._append_stream is None:
+			return
+		self._append_stream.close()
+		self._append_stream = None
+
+	def __enter__(self) -> "JsonlEvaluationCache":
+		return self
+
+	def __exit__(self, *unused: object) -> None:
+		self.close()
+
+	def __del__(self) -> None:
+		self.close()
 
 	def _load(self) -> None:
 		if not self.path.exists():

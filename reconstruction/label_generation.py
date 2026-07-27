@@ -53,6 +53,7 @@ class BatchedSearchResult:
 class _ActiveSearch:
 	sample: SearchSample
 	session: ProgramMCTSSession
+	prompt_hash: str
 
 
 ScoreGeneration = Callable[[str, str, str], EvaluationResult]
@@ -183,10 +184,15 @@ def generate_mcts_records(
 		mode=search_mode,
 	)
 	active = [
-		_ActiveSearch(sample=sample, session=search.start_session())
+		_ActiveSearch(
+			sample=sample,
+			session=search.start_session(),
+			prompt_hash=prompt_sha256(sample.question),
+		)
 		for sample in samples
 	]
 	records: Dict[str, Dict[str, Any]] = {}
+	score_cache: Dict[Tuple[str, str, str], EvaluationResult] = {}
 	cache_hits = 0
 	cache_misses = 0
 	model_batches = 0
@@ -212,6 +218,7 @@ def generate_mcts_records(
 
 			identity = _cache_identity(
 				sample=state.sample,
+				prompt_hash=state.prompt_hash,
 				path=path,
 				model_id=model_id,
 				model_revision=model_revision,
@@ -245,13 +252,18 @@ def generate_mcts_records(
 					generation.generated_answers,
 					strict=True,
 				):
-					evaluation = score_generation(
+					score_key = (
 						state.sample.question,
 						state.sample.ground_truth,
 						generated_answer,
 					)
+					evaluation = score_cache.get(score_key)
+					if evaluation is None:
+						evaluation = score_generation(*score_key)
+						score_cache[score_key] = evaluation
 					identity = _cache_identity(
 						sample=state.sample,
+						prompt_hash=state.prompt_hash,
 						path=path,
 						model_id=model_id,
 						model_revision=model_revision,
@@ -290,6 +302,7 @@ def _validate_inputs(samples: Sequence[SearchSample], batch_size: int) -> None:
 
 def _cache_identity(
 	sample: SearchSample,
+	prompt_hash: str,
 	path: LayerPath,
 	model_id: str,
 	model_revision: str,
@@ -302,7 +315,7 @@ def _cache_identity(
 		model_id=model_id,
 		model_revision=model_revision,
 		tokenizer_revision=tokenizer_revision,
-		prompt_hash=prompt_sha256(sample.question),
+		prompt_hash=prompt_hash,
 		generation_config_hash=generation_hash,
 	)
 
@@ -327,7 +340,7 @@ def _record_for_state(
 			"model_id": model_id,
 			"model_revision": model_revision,
 			"tokenizer_revision": tokenizer_revision,
-			"prompt_hash": prompt_sha256(state.sample.question),
+			"prompt_hash": state.prompt_hash,
 			"generation_config_hash": generation_hash,
 			"question_batch_size": batch_size,
 		},

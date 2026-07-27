@@ -48,6 +48,34 @@ class CacheKeyTest(unittest.TestCase):
             self.assertEqual(reloaded.get(self.identity), evaluation)
             self.assertFalse(reloaded.put(evaluation))
 
+    def test_cache_can_close_and_reopen_its_append_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cache.jsonl"
+            cache = JsonlEvaluationCache(path)
+            first = CachedEvaluation(
+                identity=self.identity,
+                binary_reward=1,
+                generated_answer="\\boxed{42}",
+            )
+            second_identity = CacheIdentity(
+                **{**self.identity.__dict__, "path": (0, 1, 2)},
+            )
+            second = CachedEvaluation(
+                identity=second_identity,
+                binary_reward=0,
+                generated_answer="\\boxed{0}",
+            )
+
+            cache.put(first)
+            cache.close()
+            cache.put(second)
+            cache.close()
+
+            reloaded = JsonlEvaluationCache(path)
+            self.assertEqual(reloaded.get(self.identity), first)
+            self.assertEqual(reloaded.get(second_identity), second)
+            self.assertEqual(len(path.read_text(encoding="utf-8").splitlines()), 2)
+
     def test_cached_path_evaluator_replays_without_calling_executor(self) -> None:
         calls = []
 
