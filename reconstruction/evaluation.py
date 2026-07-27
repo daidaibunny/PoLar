@@ -114,7 +114,11 @@ def score_math_generation(
 		dataset="math",
 		finish_reason=finish_reason,
 	)
-	correct = bool(evaluator.eval(sample))
+	try:
+		correct = bool(evaluator.eval(sample))
+	except ValueError:
+		# Malformed model output is an ordinary negative reward, not a run failure.
+		correct = False
 	return EvaluationResult(
 		binary_reward=int(correct),
 		generated_answer=generated_answer,

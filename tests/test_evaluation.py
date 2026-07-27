@@ -71,6 +71,18 @@ class OfficialMathEvaluatorTest(unittest.TestCase):
 			0,
 		)
 
+	def test_treats_unparseable_boxed_generation_as_incorrect(self) -> None:
+		generated_answer = "\\boxed{2. Thereasonisthatthere}"
+
+		result = score_math_generation(
+			question="Question",
+			ground_truth="2",
+			generated_answer=generated_answer,
+		)
+
+		self.assertEqual(result.binary_reward, 0)
+		self.assertEqual(result.generated_answer, generated_answer)
+
 
 if __name__ == "__main__":
 	unittest.main()
