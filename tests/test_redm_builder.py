@@ -8,6 +8,7 @@ from reconstruction.redm_builder import (
 	SourceFile,
 	build_redm_human,
 )
+from reconstruction.data import sha256_file
 
 
 class ReDMHumanBuilderTest(unittest.TestCase):
@@ -61,6 +62,10 @@ class ReDMHumanBuilderTest(unittest.TestCase):
 				self.assertEqual(
 					len(manifest["levels"][str(level)]["output_sha256"]),
 					64,
+				)
+				self.assertEqual(
+					manifest["levels"][str(level)]["output_sha256"],
+					sha256_file(level_path),
 				)
 
 	def test_refuses_to_overwrite_an_existing_output(self) -> None:

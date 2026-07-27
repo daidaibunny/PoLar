@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 from reconstruction.data import (
@@ -103,6 +104,11 @@ class SplitLevelRecordsTest(unittest.TestCase):
         self.assertEqual(len(split.test), 500)
         self.assertEqual(split.available_count, 2100)
         self.assertEqual(split.selected_count, 2000)
+        selected = split.train + split.validation + split.test
+        self.assertEqual(
+            Counter(row["domain"] for row in selected),
+            Counter({"Algebra": 1333, "Geometry": 667}),
+        )
 
     def test_split_is_deterministic_and_has_no_query_overlap(self) -> None:
         first = split_level_records(self._records(101), seed=42)
