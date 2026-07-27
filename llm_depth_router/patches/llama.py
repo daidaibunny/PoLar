@@ -64,7 +64,6 @@ def _llama_forward_patch(
 
     hidden_states = inputs_embeds
 
-    first_layer = self.layers[self.custom_path[0]]
     cos, sin = self.rotary_emb(hidden_states, position_ids)
     position_embeddings = (cos, sin)
 
@@ -73,21 +72,29 @@ def _llama_forward_patch(
     all_self_attns = () if output_attentions else None
 
     logger.debug(f"using custom_path {self.custom_path}")
-    for decoder_layer in [self.layers[i] for i in self.custom_path]:
+    for cache_slot, layer_index in enumerate(self.custom_path):
+        decoder_layer = self.layers[layer_index]
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
 
-        layer_outputs = decoder_layer(
-            hidden_states,
-            attention_mask=causal_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_values,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            position_embeddings=position_embeddings,
-            **flash_attn_kwargs,
-        )
+        # Cache entries belong to execution positions, not physical layer IDs.
+        # Repeated layers therefore need separate slots during autoregressive decoding.
+        original_cache_slot = decoder_layer.self_attn.layer_idx
+        decoder_layer.self_attn.layer_idx = cache_slot
+        try:
+            layer_outputs = decoder_layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_values,
+                output_attentions=output_attentions,
+                use_cache=use_cache,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **flash_attn_kwargs,
+            )
+        finally:
+            decoder_layer.self_attn.layer_idx = original_cache_slot
 
         hidden_states = layer_outputs[0]
 
