@@ -15,6 +15,7 @@ MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
 ORIGINAL_DEPTH = 28
 FULL_PATH = tuple(range(ORIGINAL_DEPTH))
 MAX_NEW_TOKENS = 50
+SAMPLING_TEMPERATURES = (0.3, 0.7, 1.0)
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,21 @@ def prompt_sha256(question: str) -> str:
 	return hashlib.sha256(build_direct_prompt(question).encode("utf-8")).hexdigest()
 
 
+def sampling_settings(temperature: float, pass_k: int) -> GenerationSettings:
+	"""Build one of the paper's explicitly reported sampling configurations."""
+	if temperature not in SAMPLING_TEMPERATURES:
+		raise ValueError(
+			f"temperature must be one of {SAMPLING_TEMPERATURES}: {temperature}",
+		)
+	if pass_k not in range(1, 6):
+		raise ValueError("pass_k must be between 1 and 5")
+	return GenerationSettings(
+		do_sample=True,
+		temperature=temperature,
+		num_return_sequences=pass_k,
+	)
+
+
 def score_math_generation(
 	question: str,
 	ground_truth: str,
@@ -108,4 +124,3 @@ def score_math_generation(
 def _canonical_sha256(payload: Dict[str, object]) -> str:
 	encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 	return hashlib.sha256(encoded).hexdigest()
-

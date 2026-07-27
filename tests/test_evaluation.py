@@ -3,8 +3,10 @@ import unittest
 from reconstruction.evaluation import (
 	FULL_PATH,
 	GenerationSettings,
+	SAMPLING_TEMPERATURES,
 	build_direct_prompt,
 	prompt_sha256,
+	sampling_settings,
 	score_math_generation,
 )
 
@@ -38,6 +40,16 @@ class DirectPromptTest(unittest.TestCase):
 		)
 		self.assertEqual(settings.sha256(), GenerationSettings().sha256())
 
+	def test_sampling_uses_only_the_reported_temperature_grid(self) -> None:
+		self.assertEqual(SAMPLING_TEMPERATURES, (0.3, 0.7, 1.0))
+		settings = sampling_settings(temperature=0.7, pass_k=5)
+
+		self.assertTrue(settings.do_sample)
+		self.assertEqual(settings.temperature, 0.7)
+		self.assertEqual(settings.num_return_sequences, 5)
+		with self.assertRaises(ValueError):
+			sampling_settings(temperature=0.5, pass_k=5)
+
 
 class OfficialMathEvaluatorTest(unittest.TestCase):
 	def test_accepts_mathematically_equivalent_boxed_answers(self) -> None:
@@ -62,4 +74,3 @@ class OfficialMathEvaluatorTest(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
-
