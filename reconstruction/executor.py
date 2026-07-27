@@ -125,7 +125,7 @@ def load_frozen_llama_executor(
 	model_id: str = MODEL_ID,
 	model_revision: Optional[str] = None,
 	tokenizer_revision: Optional[str] = None,
-	device_map: str = "cuda",
+	device: str = "cuda",
 ) -> FrozenLayerPathExecutor:
 	"""Load the requested model in bfloat16 and apply the official LLaMA patch."""
 	try:
@@ -135,6 +135,7 @@ def load_frozen_llama_executor(
 	except ImportError as error:
 		raise RuntimeError("Official model execution dependencies are unavailable") from error
 
+	validate_execution_device(torch, device)
 	apply_ulysses_patch(model_id)
 	tokenizer = AutoTokenizer.from_pretrained(
 		model_id,
@@ -143,16 +144,35 @@ def load_frozen_llama_executor(
 	)
 	if tokenizer.pad_token is None:
 		tokenizer.pad_token = tokenizer.eos_token
-	model = AutoModelForCausalLM.from_pretrained(
-		model_id,
-		revision=model_revision,
-		torch_dtype=torch.bfloat16,
-		device_map=device_map,
-	)
+	model_arguments = {
+		"revision": model_revision,
+		"torch_dtype": torch.bfloat16,
+		"low_cpu_mem_usage": True,
+	}
+	if device == "cuda":
+		model_arguments["device_map"] = "cuda"
+	model = AutoModelForCausalLM.from_pretrained(model_id, **model_arguments)
+	if device != "cuda":
+		model.to(device)
 	model.eval()
 	for parameter in model.parameters():
 		parameter.requires_grad_(False)
 	return FrozenLayerPathExecutor(model=model, tokenizer=tokenizer)
+
+
+def validate_execution_device(torch_module: Any, device: str) -> None:
+	"""Require the requested backend instead of silently falling back to the CPU."""
+	if device == "mps":
+		if not torch_module.backends.mps.is_available():
+			raise RuntimeError("The requested MPS backend is unavailable")
+		return
+	if device == "cuda":
+		if not torch_module.cuda.is_available():
+			raise RuntimeError("The requested CUDA backend is unavailable")
+		return
+	if device == "cpu":
+		return
+	raise ValueError(f"Unsupported execution device: {device!r}")
 
 
 def _official_path_setter(model: Any, path: Sequence[int]) -> None:

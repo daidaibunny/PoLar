@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from reconstruction.evaluation import GenerationSettings, build_direct_prompt
 from reconstruction.executor import (
 	FrozenLayerPathExecutor,
+	validate_execution_device,
 	validate_frozen_model,
 	validate_layer_path,
 )
@@ -79,6 +80,26 @@ class ExecutorValidationTest(unittest.TestCase):
 		wrong_depth.config = SimpleNamespace(num_hidden_layers=27)
 		with self.assertRaises(ValueError):
 			validate_frozen_model(wrong_depth, original_depth=28)
+
+	def test_never_silently_falls_back_from_requested_device(self) -> None:
+		unavailable = SimpleNamespace(
+			backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+			cuda=SimpleNamespace(is_available=lambda: False),
+		)
+		available = SimpleNamespace(
+			backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+			cuda=SimpleNamespace(is_available=lambda: True),
+		)
+
+		with self.assertRaises(RuntimeError):
+			validate_execution_device(unavailable, "mps")
+		with self.assertRaises(RuntimeError):
+			validate_execution_device(unavailable, "cuda")
+		validate_execution_device(available, "mps")
+		validate_execution_device(available, "cuda")
+		validate_execution_device(unavailable, "cpu")
+		with self.assertRaises(ValueError):
+			validate_execution_device(available, "automatic")
 
 
 class FrozenLayerPathExecutorTest(unittest.TestCase):
