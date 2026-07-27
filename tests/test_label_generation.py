@@ -37,6 +37,10 @@ def fake_score(question, ground_truth, generated_answer):
 	)
 
 
+def fake_scores(score_inputs):
+	return tuple(fake_score(*score_input) for score_input in score_inputs)
+
+
 class BatchedLabelGenerationTest(unittest.TestCase):
 	def setUp(self) -> None:
 		self.samples = (
@@ -58,7 +62,7 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 				model_revision="model-revision",
 				tokenizer_revision="tokenizer-revision",
 				batch_size=2,
-				score_generation=fake_score,
+				score_generations=fake_scores,
 				original_depth=4,
 			)
 
@@ -82,7 +86,7 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 				"model_revision": "model-revision",
 				"tokenizer_revision": "tokenizer-revision",
 				"batch_size": 2,
-				"score_generation": fake_score,
+				"score_generations": fake_scores,
 				"original_depth": 4,
 			}
 			first_executor = FakeBatchExecutor()
@@ -106,11 +110,14 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 	def test_reuses_scores_for_identical_question_answer_pairs(self) -> None:
 		calls = []
 
-		def repeated_answer_score(question, ground_truth, generated_answer):
-			calls.append((question, ground_truth, generated_answer))
-			return EvaluationResult(
-				binary_reward=1,
-				generated_answer=generated_answer,
+		def repeated_answer_scores(score_inputs):
+			calls.extend(score_inputs)
+			return tuple(
+				EvaluationResult(
+					binary_reward=1,
+					generated_answer=generated_answer,
+				)
+				for _, _, generated_answer in score_inputs
 			)
 
 		class RepeatedAnswerExecutor(FakeBatchExecutor):
@@ -133,7 +140,7 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 				model_revision="model-revision",
 				tokenizer_revision="tokenizer-revision",
 				batch_size=2,
-				score_generation=repeated_answer_score,
+				score_generations=repeated_answer_scores,
 				original_depth=4,
 			)
 
@@ -150,7 +157,7 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 				"model_id": "model",
 				"model_revision": "model-revision",
 				"tokenizer_revision": "tokenizer-revision",
-				"score_generation": fake_score,
+				"score_generations": fake_scores,
 				"original_depth": 4,
 			}
 			with self.assertRaises(ValueError):

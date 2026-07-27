@@ -20,6 +20,16 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
 EXPECTED_SAMPLES_PER_DIFFICULTY = 1_125
 GPU_IDS = (0, 1)
+OFFICIAL_REWARD_EVALUATOR = {
+	"implementation": "dart_math.eval.EvaluatorMathBatch",
+	"strict_extract": True,
+	"use_orig_eq_for_olympiadbench": True,
+	"timeout_seconds": 60,
+	"processes_per_gpu": 4,
+	"query": "",
+	"dataset": "math",
+	"source": "official PoLar polar/eval.py::_batch_compare_answers",
+}
 
 
 def build_label_command(
@@ -156,10 +166,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		"random_action_probability": 0.1,
 		"max_block_length": 4,
 		"max_repeat_count_predictor": 1,
+		"reward_evaluator": OFFICIAL_REWARD_EVALUATOR,
 		"lossless_optimizations": [
 			"reuse_exact_batch_token_tensors",
 			"reuse_prompt_hashes",
-			"reuse_official_math_evaluator",
 			"memoize_identical_scoring_inputs",
 			"reuse_flush_per_record_cache_stream",
 			"skip_network_lookup_for_pinned_revision",
@@ -316,6 +326,7 @@ def _write_or_validate_manifest(
 			"batch_size",
 			"seed",
 			"n_simulations",
+			"reward_evaluator",
 			"lossless_optimizations",
 			"data_files",
 		):

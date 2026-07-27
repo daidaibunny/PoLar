@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from reconstruction.evaluation import (
 	FULL_PATH,
@@ -8,6 +9,7 @@ from reconstruction.evaluation import (
 	prompt_sha256,
 	sampling_settings,
 	score_math_generation,
+	score_math_generations,
 )
 
 
@@ -52,6 +54,33 @@ class DirectPromptTest(unittest.TestCase):
 
 
 class OfficialMathEvaluatorTest(unittest.TestCase):
+	@patch("dart_math.eval.EvaluatorMathBatch")
+	def test_batch_scoring_matches_official_polar_configuration(
+		self,
+		evaluator_class,
+	) -> None:
+		evaluator = evaluator_class.return_value
+		evaluator.batch_eval.return_value = (["2", "3"], [True, False])
+		inputs = (
+			("ignored question one", "2", "\\boxed{2}"),
+			("ignored question two", "2", "\\boxed{3}"),
+		)
+
+		results = score_math_generations(inputs)
+
+		evaluator_class.assert_called_once_with(
+			strict_extract=True,
+			use_orig_eq_for_olympiadbench=True,
+			timeout=60,
+		)
+		samples = evaluator.batch_eval.call_args.args[0]
+		self.assertEqual(evaluator.batch_eval.call_args.kwargs, {"n_procs": 4})
+		self.assertEqual([sample.resp for sample in samples], ["\\boxed{2}", "\\boxed{3}"])
+		self.assertEqual([sample.ref_ans for sample in samples], ["2", "2"])
+		self.assertEqual([sample.query for sample in samples], ["", ""])
+		self.assertEqual([sample.dataset for sample in samples], ["math", "math"])
+		self.assertEqual([result.binary_reward for result in results], [1, 0])
+
 	def test_accepts_mathematically_equivalent_boxed_answers(self) -> None:
 		result = score_math_generation(
 			question="Express one half as a decimal.",
@@ -61,10 +90,10 @@ class OfficialMathEvaluatorTest(unittest.TestCase):
 
 		self.assertEqual(result.binary_reward, 1)
 
-	def test_rejects_non_boxed_or_incorrect_answers(self) -> None:
+	def test_matches_official_non_boxed_and_incorrect_answer_behavior(self) -> None:
 		self.assertEqual(
 			score_math_generation("Question", "2", "2").binary_reward,
-			0,
+			1,
 		)
 		self.assertEqual(
 			score_math_generation("Question", "2", "\\boxed{3}").binary_reward,

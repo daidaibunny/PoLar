@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.run_mcts_labels_2gpu import (
+	OFFICIAL_REWARD_EVALUATOR,
 	_validate_idle_a800_gpus,
 	build_label_command,
 	parse_args,
@@ -10,6 +11,21 @@ from scripts.run_mcts_labels_2gpu import (
 
 
 class TwoGpuLabelCommandTest(unittest.TestCase):
+	def test_manifest_uses_official_polar_reward_evaluator(self) -> None:
+		self.assertEqual(
+			OFFICIAL_REWARD_EVALUATOR,
+			{
+				"implementation": "dart_math.eval.EvaluatorMathBatch",
+				"strict_extract": True,
+				"use_orig_eq_for_olympiadbench": True,
+				"timeout_seconds": 60,
+				"processes_per_gpu": 4,
+				"query": "",
+				"dataset": "math",
+				"source": "official PoLar polar/eval.py::_batch_compare_answers",
+			},
+		)
+
 	def test_builds_fixed_paper_and_public_code_configuration(self) -> None:
 		command = build_label_command(
 			python_executable=Path(".venv/bin/python"),

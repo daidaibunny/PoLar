@@ -15,8 +15,9 @@ from reconstruction.cache import (
 )
 from reconstruction.evaluation import (
 	GenerationSettings,
+	MathScoreInput,
 	prompt_sha256,
-	score_math_generation,
+	score_math_generations,
 )
 from reconstruction.mcts import (
 	EvaluationResult,
@@ -56,7 +57,10 @@ class _ActiveSearch:
 	prompt_hash: str
 
 
-ScoreGeneration = Callable[[str, str, str], EvaluationResult]
+ScoreGenerations = Callable[
+	[Sequence[MathScoreInput]],
+	Sequence[EvaluationResult],
+]
 
 
 def load_search_samples(
@@ -172,7 +176,7 @@ def generate_mcts_records(
 	tokenizer_revision: str,
 	batch_size: int,
 	original_depth: int,
-	score_generation: ScoreGeneration = score_math_generation,
+	score_generations: ScoreGenerations = score_math_generations,
 	settings: GenerationSettings = GenerationSettings(),
 	run_metadata: Optional[Mapping[str, Any]] = None,
 ) -> BatchedSearchResult:
@@ -247,20 +251,49 @@ def generate_mcts_records(
 					settings=settings,
 				)
 				model_batches += 1
-				for state, generated_answer in zip(
+				generated_pairs = tuple(zip(
 					chunk,
 					generation.generated_answers,
 					strict=True,
-				):
-					score_key = (
+				))
+				score_keys = tuple(
+					(
 						state.sample.question,
 						state.sample.ground_truth,
 						generated_answer,
 					)
-					evaluation = score_cache.get(score_key)
-					if evaluation is None:
-						evaluation = score_generation(*score_key)
+					for state, generated_answer in generated_pairs
+				)
+				pending_score_keys = tuple(dict.fromkeys(
+					score_key
+					for score_key in score_keys
+					if score_key not in score_cache
+				))
+				if pending_score_keys:
+					pending_evaluations = tuple(
+						score_generations(pending_score_keys),
+					)
+					if len(pending_evaluations) != len(pending_score_keys):
+						raise RuntimeError(
+							"score_generations returned a different number of results",
+						)
+					for score_key, evaluation in zip(
+						pending_score_keys,
+						pending_evaluations,
+						strict=True,
+					):
+						if evaluation.generated_answer != score_key[2]:
+							raise RuntimeError(
+								"score_generations changed generated-answer ordering",
+							)
 						score_cache[score_key] = evaluation
+
+				for (state, generated_answer), score_key in zip(
+					generated_pairs,
+					score_keys,
+					strict=True,
+				):
+					evaluation = score_cache[score_key]
 					identity = _cache_identity(
 						sample=state.sample,
 						prompt_hash=state.prompt_hash,

@@ -5,9 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
-from functools import lru_cache
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Sequence, Tuple
 
 from reconstruction.mcts import EvaluationResult
 
@@ -17,6 +16,9 @@ ORIGINAL_DEPTH = 28
 FULL_PATH = tuple(range(ORIGINAL_DEPTH))
 MAX_NEW_TOKENS = 50
 SAMPLING_TEMPERATURES = (0.3, 0.7, 1.0)
+OFFICIAL_EVALUATOR_TIMEOUT_SECONDS = 60
+OFFICIAL_EVALUATOR_PROCESSES = 4
+MathScoreInput = Tuple[str, str, str]
 
 
 @dataclass(frozen=True)
@@ -93,41 +95,59 @@ def score_math_generation(
 	generated_answer: str,
 	finish_reason: Optional[str] = None,
 ) -> EvaluationResult:
-	"""Score a boxed generation with the unmodified DART-Math evaluator."""
-	if "oxed{" not in generated_answer:
+	"""Score one generation through the official PoLar batch evaluator."""
+	if finish_reason in ("length", "abort"):
 		return EvaluationResult(binary_reward=0, generated_answer=generated_answer)
-	evaluator = _official_math_evaluator()
-	sample = SimpleNamespace(
-		resp=generated_answer,
-		ref_ans=ground_truth,
-		ans=None,
-		query=question,
-		dataset="math",
-		finish_reason=finish_reason,
-	)
-	try:
-		correct = bool(evaluator.eval(sample))
-	except ValueError:
-		# Malformed model output is an ordinary negative reward, not a run failure.
-		correct = False
-	return EvaluationResult(
-		binary_reward=int(correct),
-		generated_answer=generated_answer,
-	)
+	return score_math_generations(
+		((question, ground_truth, generated_answer),),
+	)[0]
 
 
-@lru_cache(maxsize=1)
-def _official_math_evaluator() -> Any:
-	"""Reuse the stateless official evaluator across deterministic score calls."""
+def score_math_generations(
+	score_inputs: Sequence[MathScoreInput],
+) -> Tuple[EvaluationResult, ...]:
+	"""Match official PoLar batch scoring, including its process timeout."""
+	if not score_inputs:
+		return ()
 	try:
-		from dart_math.eval import EvaluatorMath
+		from dart_math.eval import EvaluatorMathBatch
 	except ImportError as error:
 		raise RuntimeError(
 			"The official DART-Math evaluator dependencies are not installed",
 		) from error
-	return EvaluatorMath(
+	evaluator = EvaluatorMathBatch(
 		strict_extract=True,
 		use_orig_eq_for_olympiadbench=True,
+		timeout=OFFICIAL_EVALUATOR_TIMEOUT_SECONDS,
+	)
+	samples = [
+		SimpleNamespace(
+			resp=generated_answer,
+			ref_ans=ground_truth,
+			ans=None,
+			query="",
+			dataset="math",
+		)
+		for _, ground_truth, generated_answer in score_inputs
+	]
+	_answers, corrects = evaluator.batch_eval(
+		samples,
+		n_procs=OFFICIAL_EVALUATOR_PROCESSES,
+	)
+	if len(corrects) != len(score_inputs):
+		raise RuntimeError(
+			"official evaluator returned a different number of scores than inputs",
+		)
+	return tuple(
+		EvaluationResult(
+			binary_reward=int(bool(correct)),
+			generated_answer=generated_answer,
+		)
+		for (_, _, generated_answer), correct in zip(
+			score_inputs,
+			corrects,
+			strict=True,
+		)
 	)
 
 
