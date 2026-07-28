@@ -16,6 +16,29 @@ from typing import Optional, Sequence, Tuple
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
+EMBEDDING_MODEL_ID = "Qwen/Qwen3-Embedding-0.6B"
+TRAINING_ASSIGNMENTS = {0: (1, 2), 1: (3, 4, 5)}
+
+
+def resolve_cached_model_revision(hf_home: Path, model_id: str) -> str:
+	"""Resolve and validate the immutable snapshot selected by a cache ref."""
+	model_cache_name = "models--" + model_id.replace("/", "--")
+	model_root = Path(hf_home) / "hub" / model_cache_name
+	ref_path = model_root / "refs" / "main"
+	if not ref_path.is_file():
+		raise RuntimeError(f"cached model ref is missing: {ref_path}")
+	revision = ref_path.read_text(encoding="utf-8").strip()
+	if len(revision) != 40 or any(character not in "0123456789abcdef" for character in revision):
+		raise RuntimeError(f"cached model ref is not a commit SHA: {ref_path}")
+	snapshot_path = model_root / "snapshots" / revision
+	if not snapshot_path.is_dir():
+		raise RuntimeError(f"cached model snapshot is missing: {snapshot_path}")
+	return revision
+
+
+def resolve_cached_embedding_revision(hf_home: Path) -> str:
+	"""Resolve the official frozen Predictor embedding model revision."""
+	return resolve_cached_model_revision(hf_home, EMBEDDING_MODEL_ID)
 
 
 def build_training_command(
@@ -91,10 +114,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 	hf_home = Path(hf_home_value).resolve()
 	if not hf_home.is_dir():
 		raise RuntimeError(f"HF_HOME does not exist: {hf_home}")
+	embedding_model_revision = resolve_cached_embedding_revision(hf_home)
 	_validate_supervision(supervision_root)
-	from scripts.run_mcts_labels_2gpu import _validate_idle_a800_pair
+	from scripts.run_mcts_labels_2gpu import _validate_idle_a800_gpus
 
-	gpu_state = _validate_idle_a800_pair()
+	gpu_state = _validate_idle_a800_gpus((0, 1))
 	commit = subprocess.check_output(
 		["git", "rev-parse", "HEAD"],
 		cwd=repository_root,
@@ -106,10 +130,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		"created_at_utc": datetime.now(timezone.utc).isoformat(),
 		"code_commit": commit,
 		"model_id_for_depth_and_data": MODEL_ID,
-		"predictor_embedding_model": "Qwen/Qwen3-Embedding-0.6B",
+		"predictor_embedding_model": EMBEDDING_MODEL_ID,
+		"predictor_embedding_model_revision": embedding_model_revision,
 		"parallelism": "five independent Predictors scheduled over two CUDA GPUs",
-		"physical_gpu_0_difficulties": [1, 3, 5],
-		"physical_gpu_1_difficulties": [2, 4],
+		"physical_gpu_0_difficulties": list(TRAINING_ASSIGNMENTS[0]),
+		"physical_gpu_1_difficulties": list(TRAINING_ASSIGNMENTS[1]),
 		"gpu_state_before_launch": gpu_state,
 		"num_epochs": 10,
 		"batch_size": 128,
@@ -129,7 +154,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		json.dump(manifest, destination, indent=2, sort_keys=True)
 		destination.write("\n")
 
-	assignments = {0: (1, 3, 5), 1: (2, 4)}
 	with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
 		futures = [
 			executor.submit(
@@ -142,7 +166,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 				output_root=output_root,
 				hf_home=hf_home,
 			)
-			for gpu_id, difficulties in assignments.items()
+			for gpu_id, difficulties in TRAINING_ASSIGNMENTS.items()
 		]
 		for future in futures:
 			future.result()
@@ -176,6 +200,10 @@ def _run_training_shard(
 ) -> None:
 	environment = dict(os.environ)
 	environment["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+	environment["HF_HUB_OFFLINE"] = "1"
+	environment["TRANSFORMERS_OFFLINE"] = "1"
+	environment["HF_DATASETS_OFFLINE"] = "1"
+	environment["PYTHONHASHSEED"] = "42"
 	log_path = output_root / "logs" / f"gpu-{gpu_id}.log"
 	log_path.parent.mkdir(parents=True, exist_ok=True)
 	with log_path.open("a", encoding="utf-8") as log:

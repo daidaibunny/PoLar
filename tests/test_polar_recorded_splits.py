@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from polar.data import PolarDataset
+from polar.eval import select_evaluation_samples
 from run_polar import build_arg_parser
 
 
@@ -53,6 +54,22 @@ class RecordedDataSplitTest(unittest.TestCase):
 
 		self.assertEqual([row["question"] for row in train.examples], ["train-one", "train-two"])
 		self.assertEqual([row["question"] for row in validation.examples], ["validation-one"])
+
+	def test_evaluation_selects_only_recorded_test_split(self) -> None:
+		samples = [
+			{"question_id": "train", "search_metadata": {"data_split": "train"}},
+			{"question_id": "test-1", "search_metadata": {"data_split": "test"}},
+			{"question_id": "test-2", "search_metadata": {"data_split": "test"}},
+		]
+
+		selected, description = select_evaluation_samples(
+			samples,
+			use_recorded_data_splits=True,
+			num_samples=1,
+		)
+
+		self.assertEqual([row["question_id"] for row in selected], ["test-1"])
+		self.assertEqual(description, "recorded test split, first 1")
 
 
 if __name__ == "__main__":

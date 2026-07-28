@@ -238,6 +238,31 @@ def _print_polar_cache_breakdown(
     print(f"  path hits in valid_cache:         {valid_path_hits} (across top-{top_k} paths/sample)")
     print(f"  online path evaluations:          {online_path_calls}")
 
+def select_evaluation_samples(
+    samples: List[Dict[str, Any]],
+    *,
+    use_recorded_data_splits: bool,
+    num_samples: int,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """Select the held-out split while preserving the official fixed-index mode."""
+    if use_recorded_data_splits:
+        selected = [
+            sample
+            for sample in samples
+            if isinstance(sample, dict)
+            and isinstance(sample.get("search_metadata"), dict)
+            and sample["search_metadata"].get("data_split") == "test"
+        ]
+        if num_samples:
+            selected = selected[: int(num_samples)]
+        return selected, f"recorded test split, first {len(selected)}"
+
+    start_idx, end_idx = 1500, 2000
+    if num_samples:
+        end_idx = min(start_idx + int(num_samples), len(samples))
+    return samples[start_idx:end_idx], f"fixed indices {start_idx}-{end_idx}"
+
+
 def evaluate_polar(args):
     base_path = resolve_dart_base_path(args.model_path, getattr(args, "data_root", None))
 
@@ -270,11 +295,17 @@ def evaluate_polar(args):
         with open(merged_file, "r") as f:
             data = json.load(f)
         samples = data["samples"] if isinstance(data, dict) and "samples" in data else (list(data.values()) if isinstance(data, dict) else data)
-        start_idx, end_idx = 1500, 2000
-        if args.num_samples:
-            end_idx = min(start_idx + args.num_samples, len(samples))
-        samples = samples[start_idx:end_idx]
-        print(f"[Polar] Evaluating diff{d} on {len(samples)} samples ({start_idx}-{end_idx}) from {merged_file}")
+        samples, selection = select_evaluation_samples(
+            samples,
+            use_recorded_data_splits=bool(
+                getattr(args, "use_recorded_data_splits", False)
+            ),
+            num_samples=int(getattr(args, "num_samples", 0) or 0),
+        )
+        print(
+            f"[Polar] Evaluating diff{d} on {len(samples)} samples "
+            f"({selection}) from {merged_file}"
+        )
 
         results = []
         total_correct = 0
@@ -384,4 +415,3 @@ def evaluate_polar(args):
         with open(out_path, "w") as f:
             json.dump(results, f, indent=2)
         print(f"[Polar] Saved results to {out_path}")
-

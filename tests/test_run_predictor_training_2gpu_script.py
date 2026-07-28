@@ -1,10 +1,30 @@
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from scripts.run_predictor_training_2gpu import build_training_command
+from scripts.run_predictor_training_2gpu import (
+	TRAINING_ASSIGNMENTS,
+	build_training_command,
+	resolve_cached_embedding_revision,
+)
 
 
 class TwoGpuPredictorTrainingCommandTest(unittest.TestCase):
+	def test_balances_five_independent_predictors_over_two_gpus(self) -> None:
+		self.assertEqual(TRAINING_ASSIGNMENTS, {0: (1, 2), 1: (3, 4, 5)})
+
+	def test_resolves_pinned_embedding_snapshot_from_shared_cache(self) -> None:
+		with TemporaryDirectory() as directory:
+			hf_home = Path(directory)
+			model_root = hf_home / "hub" / "models--Qwen--Qwen3-Embedding-0.6B"
+			(model_root / "refs").mkdir(parents=True)
+			(model_root / "refs" / "main").write_text("a" * 40, encoding="utf-8")
+			(model_root / "snapshots" / ("a" * 40)).mkdir(parents=True)
+
+			revision = resolve_cached_embedding_revision(hf_home)
+
+		self.assertEqual(revision, "a" * 40)
+
 	def test_uses_official_readme_starting_configuration_and_public_splits(self) -> None:
 		command = build_training_command(
 			python_executable=Path(".venv/bin/python"),
