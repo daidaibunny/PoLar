@@ -12,6 +12,6 @@
 - [x] Add batched path execution, two-GPU sharding, and append-only label outputs.
 - [x] Add measured CUDA batch selection and fixed two-GPU launch scripts.
 - [x] Add recorded public-split Predictor training support and scheduling.
-- [ ] Run the 20-question smoke test and publish time and storage estimates.
+- [x] Run the 20-question multistep MCTS smoke test and record time, storage, and path types.
 - [ ] Run the ReDM-1 pilot and validation-only parameter calibration.
 - [ ] Generate supervision, train five Predictors, and evaluate online pass at 1 through 5.

@@ -2,7 +2,7 @@
 
 更新日期：2026-07-28  
 当前代码分支：`reconstruction/mcts-llama`  
-当前代码提交：`8c0ab40ff7dc5e5cbb6e10ebd69b3de3655f85b4`  
+当前多步搜索代码提交：`f35e77aac88c3fef46a0b6df87a7fc212c5344c6`
 对照官方仓库提交：`30d0efde953a5d139e220f61a773c0eaf92d478f`
 
 ## 1. 汇报结论
@@ -21,15 +21,16 @@
 6. 构造不含测试集 MCTS 标签的 Predictor 数据目录。
 7. 完成五个独立 Predictor 的双卡训练脚本和严格在线评估脚本。
 
-当前不能把这批标签称为论文多步 MCTS 的完整复现。每个 LLaMA 问题在根节点有 212 个
-单步动作，而搜索预算只有 200 次。现有 5,625 个搜索全部只到达树深 1，UCB tree-policy
+不能把已经生成的全量标签称为论文多步 MCTS 的完整复现。每个 LLaMA 问题在根节点有 212 个
+单步动作，而搜索预算只有 200 次。旧版 5,625 个搜索全部只到达树深 1，UCB tree-policy
 selection 次数全部为 0。因此标签只包含一次 skip 或一次 repeat，没有联合 skip+repeat
-程序。这批数据可以作为官方 Predictor 的单编辑监督基线，但在正式报告论文复现结果前，
-需要先修复多步搜索覆盖并重新生成监督标签。
+程序。这批数据只作为官方 Predictor 的单编辑监督基线保留。
 
 进一步核查 2025 preliminary paper 后确认了一个实现偏差：论文写的是以 0.1 概率选择
-`random unexplored child`，当前重建却在已经展开的 children 中随机选择。论文同时明确说
-从初始路径进行多轮 skip/repeat 编辑。因此当前树深恒为 1 不是论文预期行为。
+`random unexplored child`，旧版重建却在已经展开的 children 中随机选择。论文同时明确说
+从初始路径进行多轮 skip/repeat 编辑。因此旧版树深恒为 1 不是论文预期行为。提交
+`f35e77a` 已修正该行为；20 题真实模型 smoke 找到纯 skip、纯 repeat 和联合 skip+repeat
+三类答对程序并通过官方 parser。正式五档监督仍需要用新代码重新生成。
 
 ## 2. 已核验的官方来源
 
@@ -233,7 +234,7 @@ repeat-only 占比很高并不能单独证明 LLaMA 更偏好 recurrence，因�
 
 对照来源：[Skip a Layer or Loop it? Test-Time Depth Adaptation of Pretrained LLMs](https://arxiv.org/pdf/2507.07996)
 
-| 项目 | 2025 preliminary paper | 当前重建 | 判断 |
+| 项目 | 2025 preliminary paper | 旧版全量运行 | 判断 |
 |---|---|---|---|
 | 每题 simulations | 200 | 200 | 对齐 |
 | 路径长度惩罚 | 5.0 | 5.0 | 对齐 |
@@ -256,14 +257,54 @@ child 是否包含所有起点、是否只从当前 cursor 产生操作，也没
 README 也明确说代码发布聚焦于从已发现程序训练的 Predictor。因此无法从官方仓库恢复作者
 2025 MCTS 的 child expansion 代码。
 
+### 7.5 多步 MCTS 修复与真实模型 smoke
+
+代码提交 `f35e77a` 将 0.1 概率解释为论文所写的 random unexplored child：节点没有已探索
+child 时强制扩展一个固定种子打乱后的未探索 action；节点已有 child 时，以 0.1 概率扩展
+一个未探索 action，否则在已探索 children 中选择 UCB 最高者。每次 simulation 仍然只扩展并
+执行一个新程序。这个策略直接修正了“先耗尽 212 个根动作”的行为，但因为作者没有发布
+child expansion 源码，它仍应称为独立重建，而不是作者实现的精确复刻。
+
+真实模型 smoke 使用难度 1 的前 20 个 train/validation 问题、每题 20 次 simulation、
+固定种子 42 和 Predictor-compatible 模式。基础模型及 tokenizer 均固定为
+`meta-llama/Llama-3.2-3B-Instruct` revision
+`0cb88a4f764b7a12671c53f0838cd831a0843b95`。运行位置为
+`/mnt/afs/liyiwei/PoLar/outputs/smoke/mcts_multistep_f35e77a_d1_n20_s20_20260728_030946`。
+
+| smoke 指标 | 结果 |
+|---|---:|
+| 问题数 | 20 |
+| 实际执行路径 | 420 |
+| 纯 skip 路径 | 59 |
+| 纯 repeat 路径 | 97 |
+| skip+repeat 联合路径 | 244 |
+| 答对的纯 skip 路径 | 4 |
+| 答对的纯 repeat 路径 | 22 |
+| 答对的 skip+repeat 路径 | 17 |
+| 有答对 skip / repeat / 联合路径的问题数 | 3 / 9 / 7 |
+| 达到树深大于 1 的问题 | 20 / 20 |
+| 最大树深 | 5 |
+| tree-policy selection 总数 | 489 |
+| 官方 Predictor parser 失败 | 0 |
+| 问题内重复路径 | 0 |
+| 单张 A800 运行时间 | 99.76 秒 |
+| 模型批次数 | 90 |
+| 峰值 CUDA 显存 | 7,214,202,880 bytes |
+| cache + trace 大小 | 410,162 bytes |
+
+这次 smoke 同时通过了三层验收：搜索实际进入多步树；执行路径覆盖纯 skip、纯 repeat 和联合
+skip+repeat；三类中都至少存在一个由官方数学 evaluator 判为正确且能被官方 Predictor parser
+解析的程序。它只证明搜索和监督链路可用，不能替代 50/100/200 simulation 的 pilot 对比，也
+不能用其路径比例推断正式 200-simulation 标签分布。
+
 ## 8. 与论文表 1 的对照
 
-论文表 1 报告 LLaMA 的标准路径 Base accuracy 和 Skip&Loop 搜索准确率。当前的 Base 是
-5,625 个训练/验证问题上标准 28 层路径的正确率；当前“搜索成功率”是至少找到一条正确的
+论文表 1 报告 LLaMA 的标准路径 Base accuracy 和 Skip&Loop 搜索准确率。下表旧版 Base 是
+5,625 个训练/验证问题上标准 28 层路径的正确率；旧版“搜索成功率”是至少找到一条正确的
 单编辑路径的比例。因为数据 split、问题组成和搜索深度均不同，下面的差值只用于定位偏差，
 不能解释为复现误差或算法提升。
 
-| 难度 | 论文 Base | 当前 Base | 当前减论文 | 论文 Skip&Loop | 当前任一有效路径 | 当前减论文 |
+| 难度 | 论文 Base | 旧版 Base | 旧版减论文 | 论文 Skip&Loop | 旧版任一有效路径 | 旧版减论文 |
 |---|---:|---:|---:|---:|---:|---:|
 | DM-1 | 37.9 | 31.29 | -6.61 | 84.7 | 87.11 | +2.41 |
 | DM-2 | 28.1 | 25.42 | -2.68 | 72.3 | 82.31 | +10.01 |
@@ -274,11 +315,11 @@ README 也明确说代码发布聚焦于从已发现程序训练的 Predictor。
 
 主要观察：
 
-1. 当前 Base 宏平均比论文低 1.28 个百分点，但不同难度方向不一致，说明 difficulty 划分
+1. 旧版 Base 宏平均比论文低 1.28 个百分点，但不同难度方向不一致，说明 difficulty 划分
    和问题组成的影响大于一个统一的模型偏移。
-2. 当前搜索成功率反而普遍高于论文 Skip&Loop，不能据此声称搜索更好。当前只统计 train 和
-   validation，且公开难度分段不同；现有搜索还不是多步 Skip&Loop MCTS。
-3. DM-5 的 Base 高于 DM-3 和 DM-4，与论文中 LLaMA 的非单调有效难度趋势相似，但当前五档
+2. 旧版搜索成功率反而普遍高于论文 Skip&Loop，不能据此声称搜索更好。旧版只统计 train 和
+   validation，且公开难度分段不同；这组全量搜索还不是多步 Skip&Loop MCTS。
+3. DM-5 的 Base 高于 DM-3 和 DM-4，与论文中 LLaMA 的非单调有效难度趋势相似，但公开五档
    是由公开 DART pass rate 而不是 LLaMA correctness 定义，不能把这种相似视为复现证据。
 
 ## 9. 论文表 2：第一阶段最终要报告的指标
@@ -312,6 +353,7 @@ README 也明确说代码发布聚焦于从已发现程序训练的 Predictor。
 |---|---|
 | 重建数据清单 | `data/redm-public/manifest.json` |
 | 原始 MCTS 运行根目录 | `/mnt/afs/liyiwei/PoLar/outputs/full/mcts_labels_public_2gpu_b192_6b80844_20260727_0752` |
+| 多步 MCTS smoke | `/mnt/afs/liyiwei/PoLar/outputs/smoke/mcts_multistep_f35e77a_d1_n20_s20_20260728_030946` |
 | Predictor 输入目录 | `/mnt/afs/liyiwei/PoLar/outputs/full/predictor_data_public_5625_8c0ab40_20260728` |
 | Predictor 数据清单 | 上述目录中的 `predictor_data_manifest.json` |
 | 双卡训练脚本 | `scripts/run_predictor_training_2gpu.py` |
@@ -328,11 +370,12 @@ README 也明确说代码发布聚焦于从已发现程序训练的 Predictor。
 独立重建，不是作者 split。该差异同时影响 Base accuracy、MCTS 成功率、训练标签数量和最终
 pass@k。
 
-### 11.2 当前监督是单编辑，不是完整多步 MCTS
+### 11.2 现有全量监督是单编辑，不是完整多步 MCTS
 
-这是目前最严重的限制。212 个根动作超过 200 次预算，导致搜索从未进入树的第二层，联合
+旧版全量运行中，212 个根动作超过 200 次预算，导致搜索从未进入树的第二层，联合
 skip+repeat 标签为 0。论文强调程序级组合，并在 Appendix B 将 action 定义为对当前程序
-继续修改；当前标签没有覆盖这一核心能力。
+继续修改；现有全量标签没有覆盖这一核心能力。代码修复与 smoke 已完成，但在五档数据用
+`f35e77a` 或其后续提交重新生成前，这一限制仍然适用于 Predictor 输入数据。
 
 ### 11.3 2026 MCTS 细节未完整公开
 
@@ -379,10 +422,10 @@ Predictor 的监督分布偏向 MCTS 能成功的问题；难题和搜索失败�
 ### 12.1 在正式训练前先修复搜索覆盖
 
 1. 保持 LLaMA、公开数据、直接答案 prompt、官方 evaluator 和 50-token 输出不变。
-2. 设计并记录 branching-factor 控制，使 200 次预算能够进入多步 tree policy；候选方案包括
-   progressive widening 或按层段结构生成有限 child。
-3. 在小规模样本上验证 `maximum_tree_depth_reached > 1`、`tree_policy_selection_count > 0`，并
-   确认出现 parser-compatible 的 skip+repeat 程序。
+2. 已采用并记录 random-unexplored expansion：0.1 概率扩展未探索 action，否则沿已探索
+   children 的最高 UCB 继续搜索。该策略是对 preliminary paper 的独立解释。
+3. 已在 20 题真实模型 smoke 上验证 `maximum_tree_depth_reached > 1`、
+   `tree_policy_selection_count > 0`，并找到 parser-compatible 且答对的 skip+repeat 程序。
 4. 比较 50、100、200 simulations 下搜索成功率、程序类型和每次 simulation 耗时。
 5. 通过 smoke 后重新生成五档 train/validation 标签。
 
