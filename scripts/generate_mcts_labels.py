@@ -132,6 +132,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 	total_cache_hits = 0
 	total_cache_misses = 0
 	total_model_batches = 0
+	total_reward_evaluator_batches = 0
 
 	for offset in range(0, len(remaining), arguments.search_width):
 		chunk = remaining[offset : offset + arguments.search_width]
@@ -157,6 +158,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		total_cache_hits += result.cache_hits
 		total_cache_misses += result.cache_misses
 		total_model_batches += result.model_batches
+		total_reward_evaluator_batches += result.reward_evaluator_batches
 		print(
 			json.dumps(
 				{
@@ -166,6 +168,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 					"cache_hits": total_cache_hits,
 					"cache_misses": total_cache_misses,
 					"model_batches": total_model_batches,
+					"reward_evaluator_batches": total_reward_evaluator_batches,
 				},
 				sort_keys=True,
 			),
@@ -181,6 +184,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		"cache_hits": total_cache_hits,
 		"executed_paths": total_cache_misses,
 		"model_batches": total_model_batches,
+		"reward_evaluator_batches": total_reward_evaluator_batches,
 		"elapsed_seconds": elapsed_seconds,
 		"seconds_per_executed_path": (
 			elapsed_seconds / total_cache_misses if total_cache_misses else None

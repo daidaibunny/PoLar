@@ -48,6 +48,7 @@ class BatchedSearchResult:
 	cache_hits: int
 	cache_misses: int
 	model_batches: int
+	reward_evaluator_batches: int
 
 
 @dataclass
@@ -55,6 +56,16 @@ class _ActiveSearch:
 	sample: SearchSample
 	session: ProgramMCTSSession
 	prompt_hash: str
+
+
+@dataclass(frozen=True)
+class _PendingGeneration:
+	"""One generated answer awaiting the shared round-level reward evaluation."""
+
+	state: _ActiveSearch
+	path: LayerPath
+	generated_answer: str
+	score_key: MathScoreInput
 
 
 ScoreGenerations = Callable[
@@ -200,6 +211,7 @@ def generate_mcts_records(
 	cache_hits = 0
 	cache_misses = 0
 	model_batches = 0
+	reward_evaluator_batches = 0
 	generation_hash = settings.sha256()
 
 	while len(records) < len(active):
@@ -242,6 +254,7 @@ def generate_mcts_records(
 			cache_misses += 1
 			uncached_by_path.setdefault(path, []).append(state)
 
+		pending_generations: List[_PendingGeneration] = []
 		for path, path_states in uncached_by_path.items():
 			for offset in range(0, len(path_states), batch_size):
 				chunk = path_states[offset : offset + batch_size]
@@ -264,59 +277,69 @@ def generate_mcts_records(
 					)
 					for state, generated_answer in generated_pairs
 				)
-				pending_score_keys = tuple(dict.fromkeys(
-					score_key
-					for score_key in score_keys
-					if score_key not in score_cache
-				))
-				if pending_score_keys:
-					pending_evaluations = tuple(
-						score_generations(pending_score_keys),
-					)
-					if len(pending_evaluations) != len(pending_score_keys):
-						raise RuntimeError(
-							"score_generations returned a different number of results",
-						)
-					for score_key, evaluation in zip(
-						pending_score_keys,
-						pending_evaluations,
-						strict=True,
-					):
-						if evaluation.generated_answer != score_key[2]:
-							raise RuntimeError(
-								"score_generations changed generated-answer ordering",
-							)
-						score_cache[score_key] = evaluation
-
 				for (state, generated_answer), score_key in zip(
 					generated_pairs,
 					score_keys,
 					strict=True,
 				):
-					evaluation = score_cache[score_key]
-					identity = _cache_identity(
-						sample=state.sample,
-						prompt_hash=state.prompt_hash,
-						path=path,
-						model_id=model_id,
-						model_revision=model_revision,
-						tokenizer_revision=tokenizer_revision,
-						generation_hash=generation_hash,
-					)
-					cache.put(
-						CachedEvaluation(
-							identity=identity,
-							binary_reward=evaluation.binary_reward,
-							generated_answer=evaluation.generated_answer,
+					pending_generations.append(
+						_PendingGeneration(
+							state=state,
+							path=path,
+							generated_answer=generated_answer,
+							score_key=score_key,
 						),
 					)
-					state.session.record_evaluation(evaluation)
+
+		pending_score_keys = tuple(dict.fromkeys(
+			pending.score_key
+			for pending in pending_generations
+			if pending.score_key not in score_cache
+		))
+		if pending_score_keys:
+			pending_evaluations = tuple(score_generations(pending_score_keys))
+			reward_evaluator_batches += 1
+			if len(pending_evaluations) != len(pending_score_keys):
+				raise RuntimeError(
+					"score_generations returned a different number of results",
+				)
+			for score_key, evaluation in zip(
+				pending_score_keys,
+				pending_evaluations,
+				strict=True,
+			):
+				if evaluation.generated_answer != score_key[2]:
+					raise RuntimeError(
+						"score_generations changed generated-answer ordering",
+					)
+				score_cache[score_key] = evaluation
+
+		for pending in pending_generations:
+			evaluation = score_cache[pending.score_key]
+			identity = _cache_identity(
+				sample=pending.state.sample,
+				prompt_hash=pending.state.prompt_hash,
+				path=pending.path,
+				model_id=model_id,
+				model_revision=model_revision,
+				tokenizer_revision=tokenizer_revision,
+				generation_hash=generation_hash,
+			)
+			cache.put(
+				CachedEvaluation(
+					identity=identity,
+					binary_reward=evaluation.binary_reward,
+					generated_answer=evaluation.generated_answer,
+				),
+			)
+			pending.state.session.record_evaluation(evaluation)
 
 	return BatchedSearchResult(
 		records=tuple(records[sample.question_id] for sample in samples),
 		cache_hits=cache_hits,
 		cache_misses=cache_misses,
 		model_batches=model_batches,
+		reward_evaluator_batches=reward_evaluator_batches,
 	)
 
 

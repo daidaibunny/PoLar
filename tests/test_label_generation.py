@@ -146,6 +146,43 @@ class BatchedLabelGenerationTest(unittest.TestCase):
 
 		self.assertEqual(len(calls), 2)
 
+	def test_batches_reward_evaluation_across_diverged_paths_in_one_round(self) -> None:
+		samples = tuple(
+			SearchSample(
+				question_id=f"q{index}",
+				question=f"question-{index}",
+				ground_truth=str((index % 4) + 1),
+			)
+			for index in range(8)
+		)
+		score_batches = []
+
+		def recording_scores(score_inputs):
+			score_batches.append(tuple(score_inputs))
+			return fake_scores(score_inputs)
+
+		with tempfile.TemporaryDirectory() as directory:
+			executor = FakeBatchExecutor()
+			result = generate_mcts_records(
+				samples=samples,
+				executor=executor,
+				cache=JsonlEvaluationCache(Path(directory) / "cache.jsonl"),
+				search_config=MCTSConfig(n_simulations=20, seed=42),
+				search_mode=SearchMode.PREDICTOR_COMPATIBLE,
+				model_id="model",
+				model_revision="model-revision",
+				tokenizer_revision="tokenizer-revision",
+				batch_size=len(samples),
+				score_generations=recording_scores,
+				original_depth=4,
+			)
+
+		self.assertTrue(any(len(call[0]) < len(samples) for call in executor.calls))
+		self.assertTrue(score_batches)
+		self.assertTrue(all(len(batch) == len(samples) for batch in score_batches))
+		self.assertEqual(result.reward_evaluator_batches, len(score_batches))
+		self.assertLess(result.reward_evaluator_batches, result.model_batches)
+
 	def test_rejects_invalid_batch_and_duplicate_question_ids(self) -> None:
 		with tempfile.TemporaryDirectory() as directory:
 			arguments = {
