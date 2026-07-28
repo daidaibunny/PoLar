@@ -4,6 +4,8 @@
 
 V2 数据与双卡运行代码提交：`ae8d2ef`
 
+双卡一次性安全调度提交：`532dac3`
+
 ## 1. V2 目标与边界
 
 V2 固定使用 `meta-llama/Llama-3.2-3B-Instruct`，从 ReDM-Public V1 的五个固定
@@ -69,3 +71,19 @@ repeat 和联合 skip+repeat segment 的当前版本。官方 Predictor 推理�
 
 运行目录、耗时、路径类别分布、有效标签数量和失败问题统计将在任务完成并自动校验后写入
 本节。
+
+## 5. 运行调度状态
+
+计划输出目录：
+`/mnt/afs/liyiwei/PoLar/outputs/v2/mcts_labels_v2_500_multistep_2gpu_b50_532dac3_20260728_041502`
+
+一次性监控 tmux：`polar_v2_500_wait`
+
+监控日志：`/mnt/afs/liyiwei/PoLar/logs/polar_v2_500_wait.log`
+
+一次性状态文件：`/mnt/afs/liyiwei/PoLar/logs/polar_v2_500_wait.state.json`
+
+2026-07-28 04:15 UTC 提交调度时，两张 A800 均有非本项目计算进程，各占约 27 GiB。
+监控不会终止或抢占这些进程。只有两张卡同时连续 6 次、每次间隔 30 秒满足无计算进程、
+显存不超过 64 MiB、利用率不超过 5%，才会触发一次 V2 双卡运行。触发后状态文件永久保留，
+不会重复启动第二次。
