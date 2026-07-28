@@ -6,6 +6,7 @@ from scripts.run_mcts_labels_2gpu import (
 	OFFICIAL_REWARD_EVALUATOR,
 	_validate_idle_a800_gpus,
 	build_label_command,
+	build_validation_command,
 	parse_args,
 )
 
@@ -50,6 +51,45 @@ class TwoGpuLabelCommandTest(unittest.TestCase):
 		self.assertIn("--max-samples 1125", joined)
 		self.assertIn("--batch-size 32 --search-width 32", joined)
 
+	def test_builds_v2_all_split_oracle_command(self) -> None:
+		command = build_label_command(
+			python_executable=Path(".venv/bin/python"),
+			repository_root=Path("/repo"),
+			output_root=Path("/output"),
+			model_revision="a" * 40,
+			batch_size=50,
+			difficulty=4,
+			shard_index=0,
+			data_directory=Path("/repo/data/redm-public-v2"),
+			splits=("train", "validation", "test"),
+			samples_per_difficulty=100,
+			allow_test_oracle=True,
+		)
+
+		joined = " ".join(command)
+		self.assertIn("/repo/data/redm-public-v2/diff-4.json", joined)
+		self.assertIn("--splits train validation test", joined)
+		self.assertIn("--allow-test-oracle", joined)
+		self.assertIn("--max-samples 100", joined)
+		self.assertIn("--batch-size 50 --search-width 50", joined)
+
+	def test_builds_all_difficulty_trace_validation_command(self) -> None:
+		command = build_validation_command(
+			python_executable=Path(".venv/bin/python"),
+			repository_root=Path("/repo"),
+			output_root=Path("/output"),
+		)
+
+		joined = " ".join(command)
+		self.assertIn("/repo/scripts/validate_mcts_smoke.py", joined)
+		for difficulty in range(1, 6):
+			for shard in range(2):
+				self.assertIn(
+					f"/output/diff-{difficulty}/trace-shard-{shard}-of-2.jsonl",
+					joined,
+				)
+		self.assertIn("--summary-json /output/label_validation_summary.json", joined)
+
 	def test_accepts_one_fixed_shard_for_staggered_execution(self) -> None:
 		arguments = parse_args(
 			[
@@ -65,6 +105,48 @@ class TwoGpuLabelCommandTest(unittest.TestCase):
 		)
 
 		self.assertEqual(arguments.only_shard, 0)
+
+	def test_requires_explicit_oracle_flag_for_v2_test_labels(self) -> None:
+		with self.assertRaises(SystemExit):
+			parse_args(
+				[
+					"--output-root",
+					"/new/output",
+					"--model-revision",
+					"a" * 40,
+					"--batch-size",
+					"50",
+					"--splits",
+					"train",
+					"validation",
+					"test",
+				],
+			)
+
+	def test_accepts_explicit_v2_all_split_oracle_labels(self) -> None:
+		arguments = parse_args(
+			[
+				"--output-root",
+				"/new/output",
+				"--model-revision",
+				"a" * 40,
+				"--batch-size",
+				"50",
+				"--data-directory",
+				"/repo/data/redm-public-v2",
+				"--samples-per-difficulty",
+				"100",
+				"--splits",
+				"train",
+				"validation",
+				"test",
+				"--allow-test-oracle",
+			],
+		)
+
+		self.assertEqual(arguments.samples_per_difficulty, 100)
+		self.assertEqual(arguments.splits, ["train", "validation", "test"])
+		self.assertTrue(arguments.allow_test_oracle)
 
 	@patch("scripts.run_mcts_labels_2gpu.subprocess.run")
 	@patch("scripts.run_mcts_labels_2gpu.subprocess.check_output")

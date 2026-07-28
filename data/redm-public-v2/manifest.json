@@ -1,0 +1,224 @@
+{
+  "created_at_utc": "2026-07-28T04:06:29.570118+00:00",
+  "dataset_name": "ReDM-Public-V2-100",
+  "difficulty_definition": "five equal query-count bands sorted by descending DART-Math pass_rate; query_id breaks ties",
+  "difficulty_order": "DM-1 easiest to DM-5 hardest",
+  "evaluation_warning": "All V2 splits are intended for oracle MCTS labeling; V2 test records must not be used as an unsearched online evaluation set.",
+  "intended_label_scope": [
+    "train",
+    "validation",
+    "test"
+  ],
+  "levels": {
+    "1": {
+      "available_count": 1500,
+      "domain_counts": {
+        "Algebra": 43,
+        "Counting&Probability": 9,
+        "Geometry": 4,
+        "IntermediateAlgebra": 5,
+        "NumberTheory": 6,
+        "Prealgebra": 29,
+        "Precalculus": 4
+      },
+      "output_file": "diff-1.json",
+      "output_sha256": "1c1524f18a403ad7eb665a3beb6bb6f65a98d036410040c5197170d4f2801ae1",
+      "pass_rate_range": {
+        "maximum": 1.0,
+        "minimum": 0.9753694581280788
+      },
+      "selected_count": 100,
+      "split_counts": {
+        "test": 25,
+        "train": 63,
+        "validation": 12
+      }
+    },
+    "2": {
+      "available_count": 1500,
+      "domain_counts": {
+        "Algebra": 33,
+        "Counting&Probability": 8,
+        "Geometry": 8,
+        "IntermediateAlgebra": 8,
+        "NumberTheory": 11,
+        "Prealgebra": 25,
+        "Precalculus": 7
+      },
+      "output_file": "diff-2.json",
+      "output_sha256": "7189fcb53edfc0da169bd1818346ac6eec77e017547162e83d237ed4e57e9426",
+      "pass_rate_range": {
+        "maximum": 0.9712918660287081,
+        "minimum": 0.8700787401574803
+      },
+      "selected_count": 100,
+      "split_counts": {
+        "test": 25,
+        "train": 63,
+        "validation": 12
+      }
+    },
+    "3": {
+      "available_count": 1500,
+      "domain_counts": {
+        "Algebra": 24,
+        "Counting&Probability": 10,
+        "Geometry": 10,
+        "IntermediateAlgebra": 17,
+        "NumberTheory": 16,
+        "Prealgebra": 13,
+        "Precalculus": 10
+      },
+      "output_file": "diff-3.json",
+      "output_sha256": "4f0a074e238048b19f936b2ef7adc1675e0488bda9de18c4b73a20812e274f69",
+      "pass_rate_range": {
+        "maximum": 0.8692307692307693,
+        "minimum": 0.4591503267973856
+      },
+      "selected_count": 100,
+      "split_counts": {
+        "test": 25,
+        "train": 63,
+        "validation": 12
+      }
+    },
+    "4": {
+      "available_count": 1500,
+      "domain_counts": {
+        "Algebra": 13,
+        "Counting&Probability": 12,
+        "Geometry": 13,
+        "IntermediateAlgebra": 26,
+        "NumberTheory": 15,
+        "Prealgebra": 8,
+        "Precalculus": 13
+      },
+      "output_file": "diff-4.json",
+      "output_sha256": "5ee44d85465af341be09ed2f4aedbe82ba239426a670b9006f11d98373517f83",
+      "pass_rate_range": {
+        "maximum": 0.44798657718120805,
+        "minimum": 0.0405709992486852
+      },
+      "selected_count": 100,
+      "split_counts": {
+        "test": 25,
+        "train": 63,
+        "validation": 12
+      }
+    },
+    "5": {
+      "available_count": 1500,
+      "domain_counts": {
+        "Algebra": 4,
+        "Counting&Probability": 13,
+        "Geometry": 24,
+        "IntermediateAlgebra": 31,
+        "NumberTheory": 9,
+        "Prealgebra": 4,
+        "Precalculus": 15
+      },
+      "output_file": "diff-5.json",
+      "output_sha256": "f65f9c5d6c2dcc58f86dadcb63ceb167671a997a6ec032b4a843999cef2319b5",
+      "pass_rate_range": {
+        "maximum": 0.03467057714465277,
+        "minimum": 3.31869787570149e-06
+      },
+      "selected_count": 100,
+      "split_counts": {
+        "test": 25,
+        "train": 63,
+        "validation": 12
+      }
+    }
+  },
+  "parent_dataset": {
+    "dataset_name": "ReDM-Public",
+    "manifest_path": "data/redm-public/manifest.json",
+    "manifest_sha256": "2b364a4df8c906e41b66a602cf70e036059164b20302f30c4177cc5f2bc57582"
+  },
+  "questions_per_difficulty": 100,
+  "reproduction_claim": "independent reconstruction",
+  "schema_version": 2,
+  "seed": 42,
+  "selected_questions_total": 500,
+  "selection_strategy": "domain-stratified fixed-size selection within each fixed V1 difficulty band",
+  "sources": [
+    {
+      "files": [
+        {
+          "path": "data/train-00000-of-00001.parquet",
+          "sha256": "0564aa1a849adcb1548812d9d4c897be3ec9cae53bc0f75a34203f23142a3051",
+          "size_bytes": 1205819
+        }
+      ],
+      "repository": "hkust-nlp/dart-math-pool-math-query-info",
+      "revision": "e9415a3ed9a5b96f1738abc797dbe34c02dd790e"
+    },
+    {
+      "files": [
+        {
+          "path": "MATH.zip",
+          "sha256": "d9b88da85e6ffa3e1057ae675238d6e192574243bdc45ca7d00a1339fc4d0874",
+          "size_bytes": 7914977
+        }
+      ],
+      "repository": "https://gitee.com/hf-datasets/competition_math",
+      "revision": "71b758ecc688b2822d07ffa7f8393299f1dc7cac"
+    },
+    {
+      "files": [
+        {
+          "path": "data/train-00000-of-00005.parquet",
+          "sha256": "df477919db87f811e855f5f10c3fcab45cae7fb1a615b8e53a718e180ba4e047",
+          "size_bytes": 199308613
+        },
+        {
+          "path": "data/train-00001-of-00005.parquet",
+          "sha256": "5df1618b0b6c9cf0dee0599cfcb613498eb312302f8cb6da383a3b02a8d91a49",
+          "size_bytes": 185323419
+        },
+        {
+          "path": "data/train-00002-of-00005.parquet",
+          "sha256": "9afe22228df7a2917cbb0099df9b1ac5b3fad46f25278d91479d4d6f883a29c6",
+          "size_bytes": 185865919
+        },
+        {
+          "path": "data/train-00003-of-00005.parquet",
+          "sha256": "dc26cb7fe0d5ec4fe9a4b572c1f50a1d4f219db0ccae868c99cd6804d7b229a6",
+          "size_bytes": 200293167
+        },
+        {
+          "path": "data/train-00004-of-00005.parquet",
+          "sha256": "adbef221f0b1081c8351a587ee5e1104e99e696ffb76c05db3732cf684acec2c",
+          "size_bytes": 194253288
+        }
+      ],
+      "repository": "hkust-nlp/dart-math-pool-math",
+      "revision": "2493eec006a329336a70255fcc93b8ff362a6aa5"
+    }
+  ],
+  "split_ratios": {
+    "test": 0.25,
+    "train": 0.625,
+    "validation": 0.125
+  },
+  "statistics": {
+    "by_domain": {
+      "Algebra": 117,
+      "Counting&Probability": 52,
+      "Geometry": 59,
+      "IntermediateAlgebra": 87,
+      "NumberTheory": 57,
+      "Prealgebra": 79,
+      "Precalculus": 49
+    },
+    "by_public_difficulty": {
+      "1": 100,
+      "2": 100,
+      "3": 100,
+      "4": 100,
+      "5": 100
+    },
+    "selected_questions": 500
+  }
+}

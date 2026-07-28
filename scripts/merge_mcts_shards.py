@@ -28,9 +28,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 	parser.add_argument(
 		"--splits",
 		nargs="+",
-		choices=("train", "validation"),
+		choices=("train", "validation", "test"),
 		default=["train", "validation"],
 	)
+	parser.add_argument("--allow-test-oracle", action="store_true")
 	parser.add_argument("--trace-jsonl", type=Path, nargs="+", required=True)
 	parser.add_argument("--output-json", type=Path, required=True)
 	parser.add_argument("--max-samples", type=int, default=20)
@@ -40,6 +41,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 		parser.error("--max-samples must be positive")
 	if arguments.original_depth <= 0:
 		parser.error("--original-depth must be positive")
+	if "test" in arguments.splits and not arguments.allow_test_oracle:
+		parser.error("test labels require --allow-test-oracle")
 	return arguments
 
 

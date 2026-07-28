@@ -1,7 +1,9 @@
 import unittest
+from pathlib import Path
 
 from scripts.validate_mcts_smoke import (
 	classify_predictor_path,
+	parse_args,
 	smoke_failures,
 	summarize_trace_records,
 )
@@ -20,6 +22,16 @@ class PredictorPathClassificationTest(unittest.TestCase):
 
 
 class SmokeSummaryTest(unittest.TestCase):
+	def test_accepts_multiple_trace_shards(self) -> None:
+		arguments = parse_args(
+			["--trace-jsonl", "shard-0.jsonl", "shard-1.jsonl"],
+		)
+
+		self.assertEqual(
+			arguments.trace_jsonl,
+			[Path("shard-0.jsonl"), Path("shard-1.jsonl")],
+		)
+
 	def test_requires_deep_search_and_all_three_valid_program_kinds(self) -> None:
 		records = [
 			{

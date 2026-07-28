@@ -185,7 +185,7 @@ def load_trace_records(path: Path) -> Tuple[Mapping[str, Any], ...]:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument("--trace-jsonl", type=Path, required=True)
+	parser.add_argument("--trace-jsonl", type=Path, nargs="+", required=True)
 	parser.add_argument("--original-depth", type=int, default=28)
 	parser.add_argument("--summary-json", type=Path)
 	parser.add_argument(
@@ -204,7 +204,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
 	arguments = parse_args(argv)
-	records = load_trace_records(arguments.trace_jsonl)
+	records = tuple(
+		record
+		for trace_path in arguments.trace_jsonl
+		for record in load_trace_records(trace_path)
+	)
 	summary = summarize_trace_records(records, arguments.original_depth)
 	failures = smoke_failures(summary, arguments.required_valid_kinds)
 	result = dict(summary)

@@ -40,17 +40,23 @@ def build_label_command(
 	batch_size: int,
 	difficulty: int,
 	shard_index: int,
+	data_directory: Optional[Path] = None,
+	splits: Sequence[str] = ("train", "validation"),
+	samples_per_difficulty: int = EXPECTED_SAMPLES_PER_DIFFICULTY,
+	allow_test_oracle: bool = False,
 ) -> Tuple[str, ...]:
 	"""Build one fixed-parameter command for a difficulty and physical GPU shard."""
+	if "test" in splits and not allow_test_oracle:
+		raise ValueError("test labels require allow_test_oracle=True")
+	data_root = data_directory or repository_root / "data" / "redm-public"
 	difficulty_root = output_root / f"diff-{difficulty}"
-	return (
+	command = (
 		str(python_executable),
 		str(repository_root / "scripts" / "generate_mcts_labels.py"),
 		"--data-file",
-		str(repository_root / "data" / "redm-public" / f"diff-{difficulty}.json"),
+		str(data_root / f"diff-{difficulty}.json"),
 		"--splits",
-		"train",
-		"validation",
+		*splits,
 		"--output-jsonl",
 		str(difficulty_root / f"trace-shard-{shard_index}-of-2.jsonl"),
 		"--cache-jsonl",
@@ -70,7 +76,7 @@ def build_label_command(
 		"--search-width",
 		str(batch_size),
 		"--max-samples",
-		str(EXPECTED_SAMPLES_PER_DIFFICULTY),
+		str(samples_per_difficulty),
 		"--num-shards",
 		"2",
 		"--shard-index",
@@ -88,6 +94,36 @@ def build_label_command(
 		"--device",
 		"cuda",
 	)
+	if allow_test_oracle:
+		command += ("--allow-test-oracle",)
+	return command
+
+
+def build_validation_command(
+	python_executable: Path,
+	repository_root: Path,
+	output_root: Path,
+) -> Tuple[str, ...]:
+	"""Build the cross-difficulty raw-trace validation command."""
+	trace_paths = tuple(
+		str(
+			output_root
+			/ f"diff-{difficulty}"
+			/ f"trace-shard-{shard_index}-of-2.jsonl",
+		)
+		for difficulty in range(1, 6)
+		for shard_index in GPU_IDS
+	)
+	return (
+		str(python_executable),
+		str(repository_root / "scripts" / "validate_mcts_smoke.py"),
+		"--trace-jsonl",
+		*trace_paths,
+		"--original-depth",
+		"28",
+		"--summary-json",
+		str(output_root / "label_validation_summary.json"),
+	)
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -96,6 +132,23 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 	parser.add_argument("--model-revision", required=True)
 	parser.add_argument("--batch-size", type=int, required=True)
 	parser.add_argument("--repository-root", type=Path, default=REPOSITORY_ROOT)
+	parser.add_argument(
+		"--data-directory",
+		type=Path,
+		default=REPOSITORY_ROOT / "data" / "redm-public",
+	)
+	parser.add_argument(
+		"--splits",
+		nargs="+",
+		choices=("train", "validation", "test"),
+		default=["train", "validation"],
+	)
+	parser.add_argument(
+		"--samples-per-difficulty",
+		type=int,
+		default=EXPECTED_SAMPLES_PER_DIFFICULTY,
+	)
+	parser.add_argument("--allow-test-oracle", action="store_true")
 	parser.add_argument(
 		"--only-shard",
 		type=int,
@@ -111,6 +164,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 		parser.error("--model-revision must be a 40-character commit SHA")
 	if arguments.batch_size <= 0:
 		parser.error("--batch-size must be positive")
+	if arguments.samples_per_difficulty <= 0:
+		parser.error("--samples-per-difficulty must be positive")
+	if "test" in arguments.splits and not arguments.allow_test_oracle:
+		parser.error("test labels require --allow-test-oracle")
 	if arguments.output_root.exists() and not arguments.resume:
 		parser.error("--output-root already exists; use a new path or --resume")
 	return arguments
@@ -119,6 +176,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 def main(argv: Optional[Sequence[str]] = None) -> int:
 	arguments = parse_args(argv)
 	repository_root = arguments.repository_root.resolve()
+	data_directory = arguments.data_directory.resolve()
 	output_root = arguments.output_root.resolve()
 	hf_home_value = os.environ.get("HF_HOME")
 	if not hf_home_value:
@@ -139,7 +197,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		GPU_IDS if arguments.only_shard is None else (arguments.only_shard,)
 	)
 	gpu_state = _validate_idle_a800_gpus(selected_gpu_ids)
-	data_manifest = _validate_public_data(repository_root)
+	data_manifest = _validate_public_data(
+		data_directory=data_directory,
+		splits=arguments.splits,
+		expected_samples_per_difficulty=arguments.samples_per_difficulty,
+	)
+	dataset_manifest_path = data_directory / "manifest.json"
+	dataset_manifest_bytes = dataset_manifest_path.read_bytes()
 	commit = subprocess.check_output(
 		["git", "rev-parse", "HEAD"],
 		cwd=repository_root,
@@ -164,6 +228,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 		"ucb_c": 2**0.5,
 		"length_penalty_lambda": 5.0,
 		"random_action_probability": 0.1,
+		"tree_policy": (
+			"expand one shuffled unexplored action when no child exists or with "
+			"probability 0.1; otherwise select the highest-UCB explored child"
+		),
 		"max_block_length": 4,
 		"max_repeat_count_predictor": 1,
 		"reward_evaluator": OFFICIAL_REWARD_EVALUATOR,
@@ -174,8 +242,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 			"reuse_flush_per_record_cache_stream",
 			"skip_network_lookup_for_pinned_revision",
 		],
-		"splits": ["train", "validation"],
-		"samples_per_difficulty": EXPECTED_SAMPLES_PER_DIFFICULTY,
+		"data_directory": str(data_directory),
+		"splits": list(arguments.splits),
+		"samples_per_difficulty": arguments.samples_per_difficulty,
+		"test_oracle_diagnostic": "test" in arguments.splits,
+		"dataset_manifest": {
+			"path": str(dataset_manifest_path),
+			"sha256": hashlib.sha256(dataset_manifest_bytes).hexdigest(),
+		},
 		"data_files": data_manifest,
 	}
 	_write_or_validate_manifest(output_root, manifest, arguments.resume)
@@ -192,6 +266,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 				output_root=output_root,
 				model_revision=arguments.model_revision,
 				batch_size=arguments.batch_size,
+				data_directory=data_directory,
+				splits=arguments.splits,
+				samples_per_difficulty=arguments.samples_per_difficulty,
+				allow_test_oracle=arguments.allow_test_oracle,
 			)
 			for gpu_id in selected_gpu_ids
 		]
@@ -219,6 +297,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 			output_root=output_root,
 			difficulty=difficulty,
 			resume=arguments.resume,
+			data_directory=data_directory,
+			splits=arguments.splits,
+			samples_per_difficulty=arguments.samples_per_difficulty,
+			allow_test_oracle=arguments.allow_test_oracle,
+		)
+	validation_summary_path = output_root / "label_validation_summary.json"
+	if not (arguments.resume and validation_summary_path.is_file()):
+		subprocess.run(
+			build_validation_command(
+				python_executable=Path(sys.executable),
+				repository_root=repository_root,
+				output_root=output_root,
+			),
+			cwd=repository_root,
+			check=True,
 		)
 	print(json.dumps({"status": "complete", "output_root": str(output_root)}), flush=True)
 	return 0
@@ -295,19 +388,37 @@ def _validate_idle_a800_gpus(
 	return tuple(selected_rows)
 
 
-def _validate_public_data(repository_root: Path) -> Dict[str, Dict[str, object]]:
+def _validate_public_data(
+	data_directory: Path,
+	splits: Sequence[str],
+	expected_samples_per_difficulty: int,
+) -> Dict[str, Dict[str, object]]:
 	manifest = {}
+	all_question_ids = set()
 	for difficulty in range(1, 6):
-		path = repository_root / "data" / "redm-public" / f"diff-{difficulty}.json"
+		path = data_directory / f"diff-{difficulty}.json"
 		data_bytes = path.read_bytes()
 		payload = json.loads(data_bytes)
-		count = len(payload["train"]) + len(payload["validation"])
-		if count != EXPECTED_SAMPLES_PER_DIFFICULTY:
-			raise RuntimeError(f"unexpected train+validation count for {path}: {count}")
+		split_counts = {split: len(payload[split]) for split in splits}
+		count = sum(split_counts.values())
+		if count != expected_samples_per_difficulty:
+			raise RuntimeError(
+				f"unexpected selected split count for {path}: "
+				f"{count} != {expected_samples_per_difficulty}",
+			)
+		for split in splits:
+			for record in payload[split]:
+				question_id = str(record.get("query_id", ""))
+				if not question_id or question_id in all_question_ids:
+					raise RuntimeError(
+						f"empty or duplicate selected query_id: {question_id!r}",
+					)
+				all_question_ids.add(question_id)
 		manifest[str(difficulty)] = {
 			"path": str(path),
 			"sha256": hashlib.sha256(data_bytes).hexdigest(),
-			"train_validation_count": count,
+			"selected_split_counts": split_counts,
+			"selected_count": count,
 		}
 	return manifest
 
@@ -328,6 +439,7 @@ def _write_or_validate_manifest(
 			"n_simulations",
 			"reward_evaluator",
 			"lossless_optimizations",
+			"dataset_manifest",
 			"data_files",
 		):
 			if stored.get(key) != manifest.get(key):
@@ -346,6 +458,10 @@ def _run_gpu_shard(
 	output_root: Path,
 	model_revision: str,
 	batch_size: int,
+	data_directory: Path,
+	splits: Sequence[str],
+	samples_per_difficulty: int,
+	allow_test_oracle: bool,
 ) -> None:
 	environment = dict(os.environ)
 	environment["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -361,6 +477,10 @@ def _run_gpu_shard(
 				batch_size=batch_size,
 				difficulty=difficulty,
 				shard_index=gpu_id,
+				data_directory=data_directory,
+				splits=splits,
+				samples_per_difficulty=samples_per_difficulty,
+				allow_test_oracle=allow_test_oracle,
 			)
 			log.write(json.dumps({"command": command}) + "\n")
 			log.flush()
@@ -380,6 +500,10 @@ def _merge_difficulty(
 	output_root: Path,
 	difficulty: int,
 	resume: bool,
+	data_directory: Path,
+	splits: Sequence[str],
+	samples_per_difficulty: int,
+	allow_test_oracle: bool,
 ) -> None:
 	merged_path = (
 		output_root
@@ -395,18 +519,19 @@ def _merge_difficulty(
 		str(python_executable),
 		str(repository_root / "scripts" / "merge_mcts_shards.py"),
 		"--data-file",
-		str(repository_root / "data" / "redm-public" / f"diff-{difficulty}.json"),
+		str(data_directory / f"diff-{difficulty}.json"),
 		"--splits",
-		"train",
-		"validation",
+		*splits,
 		"--trace-jsonl",
 		str(output_root / f"diff-{difficulty}" / "trace-shard-0-of-2.jsonl"),
 		str(output_root / f"diff-{difficulty}" / "trace-shard-1-of-2.jsonl"),
 		"--output-json",
 		str(merged_path),
 		"--max-samples",
-		str(EXPECTED_SAMPLES_PER_DIFFICULTY),
+		str(samples_per_difficulty),
 	)
+	if allow_test_oracle:
+		command += ("--allow-test-oracle",)
 	subprocess.run(command, cwd=repository_root, check=True)
 
 

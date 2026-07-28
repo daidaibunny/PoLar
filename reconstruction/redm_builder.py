@@ -289,6 +289,193 @@ def build_redm_public(
 	)
 
 
+def build_redm_public_v2(
+	parent_directory: Path,
+	output_directory: Path,
+	questions_per_difficulty: int = 100,
+	seed: int = 42,
+) -> BuildResult:
+	"""Derive five fixed-size, domain-stratified bands from ReDM-Public V1."""
+	if questions_per_difficulty <= 0:
+		raise ValueError("questions_per_difficulty must be positive")
+	parent_directory = Path(parent_directory)
+	output_directory = Path(output_directory)
+	output_paths = [output_directory / f"diff-{level}.json" for level in range(1, 6)]
+	manifest_path = output_directory / "manifest.json"
+	conflicting_outputs = [
+		path for path in output_paths + [manifest_path] if path.exists()
+	]
+	if conflicting_outputs:
+		raise FileExistsError(
+			"Refusing to overwrite existing ReDM-Public V2 files: "
+			+ ", ".join(str(path) for path in conflicting_outputs),
+		)
+
+	parent_manifest_path = parent_directory / "manifest.json"
+	try:
+		parent_manifest_bytes = parent_manifest_path.read_bytes()
+		parent_manifest = json.loads(parent_manifest_bytes)
+	except (FileNotFoundError, json.JSONDecodeError) as error:
+		raise DataIntegrityError(
+			f"Cannot read parent manifest {parent_manifest_path}: {error}",
+		) from error
+	if parent_manifest.get("dataset_name") != "ReDM-Public":
+		raise DataIntegrityError(
+			"V2 parent must be the fixed ReDM-Public dataset",
+		)
+
+	prepared_payloads: Dict[int, Dict[str, Any]] = {}
+	level_manifest: Dict[str, Dict[str, Any]] = {}
+	selected_records_by_level: Dict[int, Tuple[Dict[str, Any], ...]] = {}
+	all_query_ids = set()
+	for level in range(1, 6):
+		level_metadata = parent_manifest.get("levels", {}).get(str(level), {})
+		parent_file_name = level_metadata.get("output_file", f"diff-{level}.json")
+		parent_path = parent_directory / str(parent_file_name)
+		expected_sha256 = str(level_metadata.get("output_sha256", ""))
+		actual_sha256 = sha256_file(parent_path)
+		if actual_sha256 != expected_sha256:
+			raise DataIntegrityError(
+				f"Parent level hash mismatch for {parent_path}: "
+				f"{actual_sha256} != {expected_sha256}",
+			)
+		try:
+			parent_payload = json.loads(parent_path.read_text(encoding="utf-8"))
+		except json.JSONDecodeError as error:
+			raise DataIntegrityError(f"Invalid parent JSON: {parent_path}") from error
+		if int(parent_payload.get("difficulty_level", level)) != level:
+			raise DataIntegrityError(f"Parent difficulty mismatch in {parent_path}")
+
+		available_records = []
+		for split_name in ("train", "validation", "test"):
+			stored_records = parent_payload.get(split_name)
+			if not isinstance(stored_records, list):
+				raise DataIntegrityError(
+					f"Parent split {split_name!r} is not a list in {parent_path}",
+				)
+			for stored_record in stored_records:
+				record = dict(stored_record)
+				record["parent_split"] = split_name
+				query_id = str(record.get("query_id", ""))
+				if not query_id or query_id in all_query_ids:
+					raise DataIntegrityError(
+						f"Empty or duplicate parent query_id: {query_id!r}",
+					)
+				all_query_ids.add(query_id)
+				available_records.append(record)
+		if len(available_records) < questions_per_difficulty:
+			raise DataIntegrityError(
+				f"Difficulty {level} has only {len(available_records)} questions; "
+				f"V2 requires {questions_per_difficulty}",
+			)
+		available_records.sort(key=lambda record: str(record["query_id"]))
+		split = split_level_records(
+			available_records,
+			seed=seed,
+			maximum_questions=questions_per_difficulty,
+		)
+		selected_records = tuple(split.train + split.validation + split.test)
+		selected_records_by_level[level] = selected_records
+		pass_rates = [float(record["dart_pass_rate"]) for record in selected_records]
+		split_counts = {
+			"train": len(split.train),
+			"validation": len(split.validation),
+			"test": len(split.test),
+		}
+		prepared_payloads[level] = {
+			"difficulty_name": f"ReDM-Public-V2-{level}",
+			"difficulty_level": level,
+			"difficulty_definition": parent_payload.get("difficulty_definition"),
+			"parent_dataset": "ReDM-Public",
+			"parent_output_sha256": actual_sha256,
+			"subset_seed": seed,
+			"subset_strategy": (
+				"domain-stratified fixed-size selection from the corresponding "
+				"ReDM-Public V1 difficulty band"
+			),
+			"split_seed": seed,
+			"split_strategy": "domain-stratified 62.5/12.5/25",
+			"available_count": split.available_count,
+			"selected_count": split.selected_count,
+			"split_counts": split_counts,
+			"pass_rate_range": {
+				"minimum": min(pass_rates),
+				"maximum": max(pass_rates),
+			},
+			"train": list(split.train),
+			"validation": list(split.validation),
+			"test": list(split.test),
+		}
+		level_manifest[str(level)] = {
+			"available_count": split.available_count,
+			"selected_count": split.selected_count,
+			"split_counts": split_counts,
+			"pass_rate_range": prepared_payloads[level]["pass_rate_range"],
+			"domain_counts": _domain_counts(selected_records),
+			"output_file": f"diff-{level}.json",
+		}
+
+	output_directory.mkdir(parents=True, exist_ok=True)
+	for level, output_path in zip(range(1, 6), output_paths):
+		_write_json(output_path, prepared_payloads[level])
+		level_manifest[str(level)]["output_sha256"] = sha256_file(output_path)
+
+	selected_total = sum(len(records) for records in selected_records_by_level.values())
+	manifest = {
+		"schema_version": 2,
+		"dataset_name": "ReDM-Public-V2-100",
+		"reproduction_claim": "independent reconstruction",
+		"created_at_utc": datetime.now(timezone.utc).isoformat(),
+		"seed": seed,
+		"questions_per_difficulty": questions_per_difficulty,
+		"selected_questions_total": selected_total,
+		"difficulty_definition": parent_manifest.get("difficulty_definition"),
+		"difficulty_order": parent_manifest.get("difficulty_order"),
+		"selection_strategy": (
+			"domain-stratified fixed-size selection within each fixed V1 difficulty band"
+		),
+		"split_ratios": {
+			"train": 0.625,
+			"validation": 0.125,
+			"test": 0.25,
+		},
+		"intended_label_scope": ["train", "validation", "test"],
+		"evaluation_warning": (
+			"All V2 splits are intended for oracle MCTS labeling; V2 test records "
+			"must not be used as an unsearched online evaluation set."
+		),
+		"parent_dataset": {
+			"dataset_name": "ReDM-Public",
+			"manifest_path": str(parent_manifest_path),
+			"manifest_sha256": sha256_file(parent_manifest_path),
+		},
+		"sources": parent_manifest.get("sources", []),
+		"statistics": {
+			"selected_questions": selected_total,
+			"by_public_difficulty": {
+				str(level): len(records)
+				for level, records in selected_records_by_level.items()
+			},
+			"by_domain": _domain_counts(
+				record
+				for records in selected_records_by_level.values()
+				for record in records
+			),
+		},
+		"levels": level_manifest,
+	}
+	_write_json(manifest_path, manifest)
+	return BuildResult(
+		output_directory=output_directory,
+		manifest_path=manifest_path,
+		unique_questions=selected_total,
+		level_counts={
+			level: len(records)
+			for level, records in selected_records_by_level.items()
+		},
+	)
+
+
 def _normalize_level(value: Any) -> int:
 	if isinstance(value, bool):
 		raise DataIntegrityError(f"Invalid MATH level: {value!r}")
