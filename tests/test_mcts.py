@@ -146,7 +146,28 @@ class TreePolicyTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             session.request_path()
 
-    def test_200_predictor_simulations_do_not_reach_beyond_root_expansion(self) -> None:
+    def test_existing_child_is_selected_before_more_root_expansion_when_probability_zero(
+        self,
+    ) -> None:
+        result = ProgramMCTS(
+            original_depth=4,
+            config=MCTSConfig(
+                n_simulations=2,
+                random_action_probability=0.0,
+                seed=42,
+            ),
+            mode=SearchMode.PREDICTOR_COMPATIBLE,
+        ).search(
+            lambda path: EvaluationResult(
+                binary_reward=0,
+                generated_answer="\\boxed{0}",
+            ),
+        )
+
+        self.assertEqual(result.search_metadata["maximum_tree_depth_reached"], 2)
+        self.assertGreater(result.search_metadata["tree_policy_selection_count"], 0)
+
+    def test_200_predictor_simulations_reach_joint_skip_repeat_paths(self) -> None:
         result = ProgramMCTS(
             original_depth=28,
             config=MCTSConfig(n_simulations=200, seed=42),
@@ -159,8 +180,22 @@ class TreePolicyTest(unittest.TestCase):
         )
 
         self.assertGreater(result.search_metadata["root_action_count"], 200)
-        self.assertEqual(result.search_metadata["maximum_tree_depth_reached"], 1)
-        self.assertEqual(result.search_metadata["tree_policy_selection_count"], 0)
+        self.assertGreater(result.search_metadata["maximum_tree_depth_reached"], 1)
+        self.assertGreater(result.search_metadata["tree_policy_selection_count"], 0)
+
+        path_kinds = set()
+        expected_layers = set(range(28))
+        for path, _ in result.evaluations:
+            has_skip = set(path) != expected_layers
+            has_repeat = len(path) != len(set(path))
+            if has_skip and has_repeat:
+                path_kinds.add("skip_repeat")
+            elif has_skip:
+                path_kinds.add("skip_only")
+            elif has_repeat:
+                path_kinds.add("repeat_only")
+
+        self.assertEqual(path_kinds, {"skip_only", "repeat_only", "skip_repeat"})
 
 
 if __name__ == "__main__":

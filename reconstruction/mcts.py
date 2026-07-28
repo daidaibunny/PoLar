@@ -284,6 +284,12 @@ class ProgramMCTS:
 			"random_exploration": self.config.random_action_probability,
 			"random_action_probability": self.config.random_action_probability,
 			"random_action_probability_source": "CoLa 2025 preliminary default",
+			"random_unexplored_probability": self.config.random_action_probability,
+			"tree_policy": (
+				"expand one shuffled unexplored action when no child exists or with "
+				"the configured random-unexplored probability; otherwise select the "
+				"highest-UCB explored child"
+			),
 			"simulation_count_source": "CoLa 2025 preliminary default",
 			"ucb_parent_visit_definition": "immediate parent node visits",
 			"simulation_definition": "one complete path execution with greedy decoding",
@@ -345,10 +351,9 @@ class ProgramMCTS:
 			return child
 		return None
 
-	def _select_child(self, node: Node, selection_random: random.Random) -> Node:
+	def _select_child(self, node: Node) -> Node:
+		"""Select the highest-UCB child among already explored programs."""
 		children = tuple(node.children.values())
-		if selection_random.random() < self.config.random_action_probability:
-			return selection_random.choice(children)
 		return max(
 			children,
 			key=lambda child: (
@@ -425,18 +430,24 @@ class ProgramMCTSSession:
 			self.simulation_attempts += 1
 			node = self.root
 			while True:
-				child = self.search._expand_one(node, self.seen)
-				if child is not None:
-					self.pending_node = child
-					self.maximum_tree_depth_reached = max(
-						self.maximum_tree_depth_reached,
-						_node_depth(child),
-					)
-					return child.path
+				should_expand = bool(node.unexpanded_actions) and (
+					not node.children
+					or self.selection_random.random()
+					< self.search.config.random_action_probability
+				)
+				if should_expand:
+					child = self.search._expand_one(node, self.seen)
+					if child is not None:
+						self.pending_node = child
+						self.maximum_tree_depth_reached = max(
+							self.maximum_tree_depth_reached,
+							_node_depth(child),
+						)
+						return child.path
 				if not node.children:
 					break
 				self.tree_policy_selection_count += 1
-				node = self.search._select_child(node, self.selection_random)
+				node = self.search._select_child(node)
 
 		self.search_exhausted = True
 		return None
