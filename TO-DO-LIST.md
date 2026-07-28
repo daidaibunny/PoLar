@@ -14,6 +14,7 @@
 - [x] Add recorded public-split Predictor training support and scheduling.
 - [x] Run the 20-question multistep MCTS smoke test and record time, storage, and path types.
 - [x] Build ReDM-Public V2 with five difficulty groups of 100 unique questions.
+- [x] Add lossless round-batched rewards and two difficulty workers per GPU for V2 resume.
 - [ ] Generate and validate multistep MCTS labels for all 500 V2 questions.
 - [ ] Run the ReDM-1 pilot and validation-only parameter calibration.
 - [ ] Generate supervision, train five Predictors, and evaluate online pass at 1 through 5.
