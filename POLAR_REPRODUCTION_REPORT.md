@@ -27,6 +27,10 @@ selection 次数全部为 0。因此标签只包含一次 skip 或一次 repeat�
 程序。这批数据可以作为官方 Predictor 的单编辑监督基线，但在正式报告论文复现结果前，
 需要先修复多步搜索覆盖并重新生成监督标签。
 
+进一步核查 2025 preliminary paper 后确认了一个实现偏差：论文写的是以 0.1 概率选择
+`random unexplored child`，当前重建却在已经展开的 children 中随机选择。论文同时明确说
+从初始路径进行多轮 skip/repeat 编辑。因此当前树深恒为 1 不是论文预期行为。
+
 ## 2. 已核验的官方来源
 
 - 2026 PoLar 论文：[arXiv 2606.06574](https://arxiv.org/html/2606.06574)
@@ -225,6 +229,33 @@ repeat-only 占比很高并不能单独证明 LLaMA 更偏好 recurrence，因�
 单编辑枚举，没有实际进入多步 tree policy。这个限制必须在正式 PoLar 训练前解决，或者把
 当前实验明确命名为 `single-edit supervision baseline`。
 
+### 7.4 与 2025 preliminary MCTS 的进一步核查
+
+对照来源：[Skip a Layer or Loop it? Test-Time Depth Adaptation of Pretrained LLMs](https://arxiv.org/pdf/2507.07996)
+
+| 项目 | 2025 preliminary paper | 当前重建 | 判断 |
+|---|---|---|---|
+| 每题 simulations | 200 | 200 | 对齐 |
+| 路径长度惩罚 | 5.0 | 5.0 | 对齐 |
+| 随机探索概率 | 0.1 | 0.1 | 数值对齐 |
+| 0.1 概率选择对象 | `random unexplored child` | 已展开 children 中随机选择 | 不对齐 |
+| 搜索过程 | 从初始路径进行多轮 skip/repeat 编辑 | 只完成根节点单次编辑 | 不对齐 |
+| block size | `k` 属于 1 至 4 | 1 至 4 | 对齐 |
+| repeat count | diagnostic CoLa 中 `r` 属于 1 至 4 | Predictor 标签固定额外重复一次 | 有意收窄 |
+| 联合搜索空间 | 同一搜索允许 skip 与 recurrence | 允许该语言，但本次没有到达第二层 | 形式允许，实际未覆盖 |
+| 最终路径长度上限 | 论文说有限制，但没有给数值 | Predictor parser 语言提供结构上界 | 无法逐项对齐 |
+| child 生成和限宽 | 未说明 | 枚举全部合法 start、block 和 operation | 独立选择 |
+
+preliminary paper 的 action 描述使用“skip 下一段”或“repeat 下一段”的措辞，但没有说明
+child 是否包含所有起点、是否只从当前 cursor 产生操作，也没有公布 progressive widening、
+每节点 child 上限或 action prior。作者的 200 次搜索能够报告联合空间的显著收益，并明确称为
+多轮编辑，所以其实际实现必然避免了“212 个根动作耗尽全部预算”的退化；具体机制没有公开。
+
+官方 `tianyi-lab/PoLar` 仓库只有 `main` 分支、没有 tag。最初的 `Release POLAR code`
+提交与后续历史均只包含 Predictor、在线层路径执行器和数学 evaluator，没有 MCTS 源文件。
+README 也明确说代码发布聚焦于从已发现程序训练的 Predictor。因此无法从官方仓库恢复作者
+2025 MCTS 的 child expansion 代码。
+
 ## 8. 与论文表 1 的对照
 
 论文表 1 报告 LLaMA 的标准路径 Base accuracy 和 Skip&Loop 搜索准确率。当前的 Base 是
@@ -308,7 +339,9 @@ skip+repeat 标签为 0。论文强调程序级组合，并在 Appendix B 将 ac
 论文没有给出所有实现选择，例如如何控制巨大 branching factor、一次 expansion 生成多少
 child、是否 progressive widening、root action prior 和完整超参数。当前 200 simulations、
 长度惩罚 5.0、随机探索 0.1 来自 preliminary 配置，运行清单已经明确标注，不能声称是
-2026 作者实验的确定设置。
+2026 作者实验的确定设置。2025 preliminary paper 虽然明确写了 0.1 概率选择
+`random unexplored child`，但仍没有给出 unexplored child 集合的构造和限宽方式。当前实现
+随机选择已展开 child，属于需要修正的确定偏差。
 
 ### 11.4 README 配置不等于作者五个最终超参数
 
